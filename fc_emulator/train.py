@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 from pathlib import Path
+from typing import Optional
 
 try:  # pragma: no cover - optional dependency
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -20,6 +21,12 @@ from .rl_utils import (
     parse_action_set,
     resolve_existing_path,
 )
+
+
+def _find_latest_checkpoint(log_dir: Path, algo: str) -> Optional[Path]:
+    pattern = f"{algo}_agent*.zip"
+    checkpoints = sorted(log_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+    return checkpoints[-1] if checkpoints else None
 
 
 def main() -> None:
@@ -88,13 +95,21 @@ def main() -> None:
 
     algo_cls = ALGO_MAP[args.algo]
     tensorboard_log = str(log_dir) if args.tensorboard else None
-    model = algo_cls(
-        "CnnPolicy",
-        vec_env,
-        verbose=1,
-        tensorboard_log=tensorboard_log,
-        device=args.device,
-    )
+
+    checkpoint_path = _find_latest_checkpoint(log_dir, args.algo)
+    if checkpoint_path:
+        print(f"Loading checkpoint: {checkpoint_path.name}")
+        model = algo_cls.load(str(checkpoint_path), env=vec_env, device=args.device)
+        if args.tensorboard and hasattr(model, "tensorboard_log"):
+            model.tensorboard_log = tensorboard_log
+    else:
+        model = algo_cls(
+            "CnnPolicy",
+            vec_env,
+            verbose=1,
+            tensorboard_log=tensorboard_log,
+            device=args.device,
+        )
 
     if args.checkpoint_freq > 0:
         save_freq = max(1, args.checkpoint_freq // args.num_envs)
@@ -121,3 +136,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
