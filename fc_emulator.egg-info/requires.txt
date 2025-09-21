@@ -1,0 +1,12 @@
+nes-py>=8.2.1
+gymnasium>=0.29
+numpy>=1.24
+pygame>=2.5
+
+[development]
+pytest>=7.4
+
+[rl]
+torch>=2.2
+stable-baselines3>=2.3
+tensorboard>=2.14

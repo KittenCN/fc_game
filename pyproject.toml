@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fc-emulator"
+version = "0.1.0"
+description = "Python FC (NES) emulator toolkit with RL-friendly interfaces"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+license = { text = "MIT" }
+dependencies = [
+    "nes-py>=8.2.1",
+    "gymnasium>=0.29",
+    "numpy>=1.24",
+    "pygame>=2.5"
+]
+
+[project.optional-dependencies]
+development = [
+    "pytest>=7.4"
+]
+rl = [
+    "torch>=2.2",
+    "stable-baselines3>=2.3",
+    "tensorboard>=2.14"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourname/fc-emulator"
+"Source" = "https://github.com/yourname/fc-emulator"
+"Issues" = "https://github.com/yourname/fc-emulator/issues"
+
+[tool.setuptools.package-dir]
+"fc_emulator" = "fc_emulator"
