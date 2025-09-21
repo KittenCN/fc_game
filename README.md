@@ -76,3 +76,4 @@ python -m fc_emulator.cli --rom path/to/game.nes
 - 增加更多动作预设与训练曲线可视化工具。
 
 欢迎根据需要扩展，用于神经网络训练或其它自动化项目。
+

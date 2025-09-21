@@ -20,13 +20,30 @@ def _to_controller(action: np.ndarray | list[int]) -> ControllerState:
 
 
 @dataclass(slots=True)
+class RewardContext:
+    """Runtime data provided to reward shaping callbacks."""
+
+    frame: np.ndarray
+    base_reward: float
+    info: dict[str, Any]
+    ram: np.ndarray
+    done: bool
+    step: int
+
+
+@dataclass(slots=True)
 class RewardConfig:
     """Allows plugging a custom reward shaping callback."""
 
-    func: Callable[[np.ndarray, float, dict[str, Any]], float]
+    func: Callable[[RewardContext], float]
+    on_reset: Callable[[], None] | None = None
 
-    def compute(self, frame: np.ndarray, base_reward: float, info: dict[str, Any]) -> float:
-        return self.func(frame, base_reward, info)
+    def compute(self, context: RewardContext) -> float:
+        return self.func(context)
+
+    def reset(self) -> None:
+        if self.on_reset:
+            self.on_reset()
 
 
 class NESGymEnv(gym.Env):
@@ -48,6 +65,7 @@ class NESGymEnv(gym.Env):
         self.reward_config = reward_config
         self._renderer: ScreenRenderer | None = None
         self.render_mode = render_mode
+        self._episode_steps = 0
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
@@ -55,9 +73,14 @@ class NESGymEnv(gym.Env):
     # Gym API ---------------------------------------------------------------
     def reset(self, *, seed: int | None = None, options: dict | None = None):  # type: ignore[override]
         super().reset(seed=seed)
+        if self.reward_config:
+            self.reward_config.reset()
+        self._episode_steps = 0
         frame = self.emulator.reset()
         obs = self._process_observation(frame)
-        info: dict[str, Any] = {}
+        info: dict[str, Any] = {
+            "metrics": self._extract_metrics_from_ram(self.emulator.get_ram())
+        }
         if self.render_mode == "human":
             self._ensure_renderer()
             assert self._renderer is not None
@@ -72,24 +95,44 @@ class NESGymEnv(gym.Env):
         last_frame = None
 
         for _ in range(self.frame_skip):
-            frame, reward, done, info = self._step_once(controller)
+            frame, reward, done, step_info = self._step_once(controller)
             total_reward += reward
             last_frame = frame
+            if step_info:
+                info = step_info
             terminated = done
             if done:
                 break
 
         assert last_frame is not None
         processed = self._process_observation(last_frame)
+        self._episode_steps += 1
+
+        ram_snapshot = self.emulator.get_ram().copy()
+        metrics = self._extract_metrics_from_ram(ram_snapshot)
+        merged_info = dict(info)
+        merged_info.setdefault("metrics", {}).update(metrics)
+        base_reward_value = total_reward
+
         if self.reward_config:
-            total_reward = self.reward_config.compute(last_frame, total_reward, info)
+            context = RewardContext(
+                frame=last_frame,
+                base_reward=base_reward_value,
+                info=merged_info,
+                ram=ram_snapshot,
+                done=terminated,
+                step=self._episode_steps,
+            )
+            total_reward = self.reward_config.compute(context)
+            merged_info.setdefault("diagnostics", {})["base_reward"] = base_reward_value
+            merged_info["diagnostics"]["shaped_reward"] = total_reward
 
         if self.render_mode == "human":
             self._ensure_renderer()
             assert self._renderer is not None
             self._renderer.draw_frame(last_frame)
 
-        return processed, total_reward, terminated, False, info
+        return processed, total_reward, terminated, False, merged_info
 
     def render(self):
         if self.render_mode != "human":
@@ -111,6 +154,30 @@ class NESGymEnv(gym.Env):
     def _step_once(self, controller: ControllerState):
         frame, reward, done, info = self.emulator.step(controller)
         return frame, reward, done, info
+
+    @staticmethod
+    def _extract_metrics_from_ram(ram: np.ndarray) -> dict[str, int]:
+        metrics: dict[str, int] = {}
+        try:
+            metrics["mario_x"] = int(ram[0x6D]) * 256 + int(ram[0x86])
+            metrics["world"] = int(ram[0x075F]) + 1
+            metrics["stage"] = int(ram[0x0760]) + 1
+            metrics["area"] = int(ram[0x0761])
+            metrics["timer"] = (
+                (int(ram[0x07F8]) & 0x0F) * 100
+                + (int(ram[0x07F9]) & 0x0F) * 10
+                + (int(ram[0x07FA]) & 0x0F)
+            )
+            score_digits = [int(ram[addr]) & 0x0F for addr in range(0x07DE, 0x07E4)]
+            score = 0
+            for digit in score_digits:
+                score = score * 10 + digit
+            metrics["score"] = score
+            metrics["player_state"] = int(ram[0x0756])
+            metrics["lives"] = int(ram[0x075A]) & 0x0F
+        except IndexError:
+            pass
+        return metrics
 
     def _process_observation(self, frame: np.ndarray) -> np.ndarray:
         if self.observation_type == "rgb":
@@ -137,3 +204,4 @@ class NESGymEnv(gym.Env):
     def _ensure_renderer(self) -> None:
         if not self._renderer:
             self._renderer = ScreenRenderer()
+

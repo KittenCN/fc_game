@@ -13,6 +13,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
     ) from exc
 
+from .rewards import REWARD_PRESETS
 from .rl_utils import (
     ALGO_MAP,
     make_vector_env,
@@ -48,6 +49,12 @@ def main() -> None:
         metavar=("HEIGHT", "WIDTH"),
         help="Downscale observations before feeding the policy",
     )
+    parser.add_argument(
+        "--reward-profile",
+        choices=["none", *sorted(REWARD_PRESETS.keys())],
+        default="none",
+        help="Reward shaping preset (default: none).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
     parser.add_argument("--log-dir", default="runs", help="Directory for checkpoints and TensorBoard logs")
@@ -62,6 +69,7 @@ def main() -> None:
 
     action_set = parse_action_set(args.action_set)
     resize_shape = tuple(args.resize) if args.resize else None
+    reward_factory = None if args.reward_profile == "none" else REWARD_PRESETS[args.reward_profile]
 
     vec_env = make_vector_env(
         str(rom_path),
@@ -73,6 +81,7 @@ def main() -> None:
         seed=args.seed,
         resize_shape=resize_shape,
         vec_env_type=args.vec_env,
+        reward_config_factory=reward_factory,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")

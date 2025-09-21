@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import gymnasium as gym
 
@@ -16,7 +16,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
     ) from exc
 
-from fc_emulator.rl_env import NESGymEnv
+from fc_emulator.rl_env import NESGymEnv, RewardConfig
 from fc_emulator.wrappers import (
     ACTION_PRESETS,
     DiscreteActionWrapper,
@@ -39,12 +39,15 @@ def build_env(
     max_episode_steps: int | None,
     render_mode: str | None,
     resize_shape: tuple[int, int] | None,
+    reward_config_factory: Callable[[], RewardConfig | None] | None,
 ) -> gym.Env:
+    reward_cfg = reward_config_factory() if reward_config_factory else None
     env = NESGymEnv(
         rom_path,
         frame_skip=frame_skip,
         observation_type=observation_type,
         render_mode=render_mode,
+        reward_config=reward_cfg,
     )
     if resize_shape and observation_type in {"rgb", "gray"}:
         env = ResizeObservationWrapper(env, resize_shape)
@@ -77,6 +80,7 @@ def make_vector_env(
     render_mode: str | None = None,
     resize_shape: tuple[int, int] | None = None,
     vec_env_type: str = "auto",
+    reward_config_factory: Callable[[], RewardConfig | None] | None = None,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
@@ -92,6 +96,7 @@ def make_vector_env(
             max_episode_steps=max_episode_steps,
             render_mode=render_mode,
             resize_shape=resize_shape,
+            reward_config_factory=reward_config_factory,
         ),
         vec_env_cls=vec_cls,
     )
