@@ -28,6 +28,7 @@ python -m fc_emulator.cli --rom path/to/game.nes
    ```bash
    pip install -e .[rl]
    ```
+   若之前已安装过，可单独补充图像缩放依赖：`pip install pillow`。
 2. 使用内置训练脚本（默认使用离散化动作集合与灰度观测）：
    ```bash
    python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
@@ -35,12 +36,14 @@ python -m fc_emulator.cli --rom path/to/game.nes
    ```
    - `--action-set` 可选择 `default`/`simple`，或自定义按键组合，例如：`"RIGHT;A,RIGHT;B"`。
    - `--frame-skip` / `--frame-stack` 控制子采样与状态堆叠，兼容 Stable-Baselines3 的 `CnnPolicy`。
+   - `--resize HEIGHT WIDTH` 可以在进入策略网络前对观测图像下采样（如 `--resize 84 84`），显著降低计算量并加速训练。
+   - 增加 `--num-envs` 可以并行运行多个环境，进一步压榨 CPU/GPU 吞吐。
 3. 载入已训练模型并实时推理：
    ```bash
    python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
        --model runs/ppo_agent_20250101-120000.zip --deterministic
    ```
-   推理时会自动开启 `render_mode="human"`，可观察智能体操作过程。
+   推理时会自动开启 `render_mode="human"`，可观察智能体操作过程。若训练时使用了下采样，请传入同样的 `--resize` 参数保持输入尺寸一致。
 
 ## 面向自动化训练
 - `fc_emulator.rl_env.NESGymEnv` 基于 `gymnasium.Env`，暴露 `step/reset/render` 接口。

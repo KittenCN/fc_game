@@ -28,6 +28,7 @@ def main() -> None:
     parser.add_argument("--max-episode-steps", type=int, default=5_000)
     parser.add_argument("--observation-type", choices=["rgb", "gray"], default="gray")
     parser.add_argument("--action-set", help="Preset name (default/simple) or custom combos")
+    parser.add_argument("--resize", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), help="Downscale observations (must match training)")
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--deterministic", action="store_true", help="Use deterministic policy for inference")
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
@@ -37,6 +38,7 @@ def main() -> None:
     model_path = resolve_existing_path(args.model, "Model")
 
     action_set = parse_action_set(args.action_set)
+    resize_shape = tuple(args.resize) if args.resize else None
 
     vec_env = make_vector_env(
         str(rom_path),
@@ -47,6 +49,7 @@ def main() -> None:
         n_envs=1,
         seed=None,
         render_mode="human",
+        resize_shape=resize_shape,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")
@@ -61,7 +64,7 @@ def main() -> None:
         steps = 0
         while not done:
             action, _ = model.predict(obs, deterministic=args.deterministic)
-            obs, rewards, dones, infos = vec_env.step(action)
+            obs, rewards, dones, _infos = vec_env.step(action)
             total_reward += float(rewards[0])
             done = bool(dones[0])
             steps += 1

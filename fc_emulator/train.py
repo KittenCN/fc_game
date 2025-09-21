@@ -35,6 +35,7 @@ def main() -> None:
         "--action-set",
         help="Preset name (default/simple) or custom combos like 'RIGHT;A,RIGHT;B'",
     )
+    parser.add_argument("--resize", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), help="Downscale observations before feeding the policy")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
     parser.add_argument("--log-dir", default="runs", help="Directory for checkpoints and TensorBoard logs")
@@ -48,6 +49,7 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     action_set = parse_action_set(args.action_set)
+    resize_shape = tuple(args.resize) if args.resize else None
 
     vec_env = make_vector_env(
         str(rom_path),
@@ -57,6 +59,7 @@ def main() -> None:
         max_episode_steps=args.max_episode_steps,
         n_envs=args.num_envs,
         seed=args.seed,
+        resize_shape=resize_shape,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")

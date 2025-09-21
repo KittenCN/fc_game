@@ -16,7 +16,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
     ) from exc
 
 from fc_emulator.rl_env import NESGymEnv
-from fc_emulator.wrappers import ACTION_PRESETS, DiscreteActionWrapper, DEFAULT_ACTION_SET
+from fc_emulator.wrappers import ACTION_PRESETS, DiscreteActionWrapper, DEFAULT_ACTION_SET, ResizeObservationWrapper
 
 ALGO_MAP = {
     "ppo": PPO,
@@ -32,6 +32,7 @@ def build_env(
     action_set: Sequence[Sequence[str]],
     max_episode_steps: int | None,
     render_mode: str | None,
+    resize_shape: tuple[int, int] | None,
 ) -> gym.Env:
     env = NESGymEnv(
         rom_path,
@@ -39,6 +40,8 @@ def build_env(
         observation_type=observation_type,
         render_mode=render_mode,
     )
+    if resize_shape and observation_type in {"rgb", "gray"}:
+        env = ResizeObservationWrapper(env, resize_shape)
     env = DiscreteActionWrapper(env, action_set=action_set)
     if max_episode_steps:
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
@@ -56,6 +59,7 @@ def make_vector_env(
     n_envs: int,
     seed: int | None,
     render_mode: str | None = None,
+    resize_shape: tuple[int, int] | None = None,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     return make_vec_env(
@@ -69,6 +73,7 @@ def make_vector_env(
             action_set=chosen_action_set,
             max_episode_steps=max_episode_steps,
             render_mode=render_mode,
+            resize_shape=resize_shape,
         ),
     )
 

@@ -26,7 +26,8 @@ development = [
 rl = [
     "torch>=2.2",
     "stable-baselines3>=2.3",
-    "tensorboard>=2.14"
+    "tensorboard>=2.14",
+    "pillow>=9.0"
 ]
 
 [project.urls]
