@@ -37,6 +37,7 @@ python -m fc_emulator.cli --rom path/to/game.nes
    - `--action-set` 可选择 `default`/`simple`，或自定义按键组合，例如：`"RIGHT;A,RIGHT;B"`。
    - `--frame-skip` / `--frame-stack` 控制子采样与状态堆叠，兼容 Stable-Baselines3 的 `CnnPolicy`。
    - `--resize HEIGHT WIDTH` 可以在进入策略网络前对观测图像下采样（如 `--resize 84 84`），显著降低计算量并加速训练。
+   - `--vec-env subproc` 强制使用多进程采样，使 CPU 多核更充分，默认 `auto` 会在 `--num-envs>1` 时自动启用。
    - 增加 `--num-envs` 可以并行运行多个环境，进一步压榨 CPU/GPU 吞吐。
 3. 载入已训练模型并实时推理：
    ```bash

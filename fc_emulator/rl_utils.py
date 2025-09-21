@@ -9,6 +9,7 @@ import gymnasium as gym
 try:  # pragma: no cover - optional dependency
     from stable_baselines3 import A2C, PPO
     from stable_baselines3.common.env_util import make_vec_env
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
     from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 except ImportError as exc:  # pragma: no cover - user guidance
     raise ImportError(
@@ -16,7 +17,12 @@ except ImportError as exc:  # pragma: no cover - user guidance
     ) from exc
 
 from fc_emulator.rl_env import NESGymEnv
-from fc_emulator.wrappers import ACTION_PRESETS, DiscreteActionWrapper, DEFAULT_ACTION_SET, ResizeObservationWrapper
+from fc_emulator.wrappers import (
+    ACTION_PRESETS,
+    DiscreteActionWrapper,
+    DEFAULT_ACTION_SET,
+    ResizeObservationWrapper,
+)
 
 ALGO_MAP = {
     "ppo": PPO,
@@ -49,6 +55,16 @@ def build_env(
     return env
 
 
+def _select_vec_env_cls(vec_env_type: str, n_envs: int):
+    if vec_env_type == "dummy":
+        return DummyVecEnv
+    if vec_env_type == "subproc":
+        return SubprocVecEnv
+    if vec_env_type == "auto":
+        return SubprocVecEnv if n_envs > 1 else DummyVecEnv
+    raise ValueError(f"Unknown vec_env_type: {vec_env_type}")
+
+
 def make_vector_env(
     rom_path: str,
     *,
@@ -60,8 +76,10 @@ def make_vector_env(
     seed: int | None,
     render_mode: str | None = None,
     resize_shape: tuple[int, int] | None = None,
+    vec_env_type: str = "auto",
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
+    vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
     return make_vec_env(
         build_env,
         n_envs=n_envs,
@@ -75,6 +93,7 @@ def make_vector_env(
             render_mode=render_mode,
             resize_shape=resize_shape,
         ),
+        vec_env_cls=vec_cls,
     )
 
 
