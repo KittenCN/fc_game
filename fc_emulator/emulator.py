@@ -56,7 +56,15 @@ class NESEmulator:
         return obs
 
     def get_ram(self) -> np.ndarray:
-        return self.env.get_ram()
+        """Return a copy of the NES RAM regardless of nes-py version."""
+        if hasattr(self.env, "get_ram"):
+            ram = self.env.get_ram()
+            if isinstance(ram, np.ndarray):
+                return ram
+            return np.asarray(ram, dtype=np.uint8)
+        if hasattr(self.env, "ram"):
+            return np.asarray(self.env.ram, dtype=np.uint8)
+        raise AttributeError("Underlying NESEnv instance does not expose RAM access")
 
     def get_screen(self) -> np.ndarray:
         return self.env.screen
