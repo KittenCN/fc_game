@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Tuple
 
 import gymnasium as gym
 
@@ -45,6 +45,56 @@ def _derive_skill_action_indices(action_set: Sequence[Sequence[str]]) -> tuple[i
             skill_indices.append(idx)
     return tuple(skill_indices)
 
+def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> tuple[tuple[int, ...], ...]:
+    normalized = [tuple(btn.upper() for btn in combo) for combo in action_set]
+    index_lookup = {frozenset(combo): idx for idx, combo in enumerate(normalized)}
+
+    def find_index(buttons: tuple[str, ...]) -> int | None:
+        return index_lookup.get(frozenset(buttons))
+
+    def first_valid(*values: int | None) -> int | None:
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    def ensure_sequence(indices: tuple[int | None, ...], store: list[tuple[int, ...]]):
+        if any(idx is None for idx in indices):
+            return
+        typed = tuple(int(idx) for idx in indices)
+        if typed and typed not in store:
+            store.append(typed)
+
+    sequences: list[tuple[int, ...]] = []
+
+    def combo(*buttons: str) -> tuple[str, ...]:
+        return tuple(btn.upper() for btn in buttons if btn)
+
+    run_right = first_valid(find_index(combo("B", "RIGHT")), find_index(combo("RIGHT")))
+    run_jump_right = first_valid(find_index(combo("A", "B", "RIGHT")), find_index(combo("A", "RIGHT")))
+    short_jump_right = find_index(combo("A", "RIGHT"))
+    ensure_sequence((run_right, run_right, run_jump_right, run_jump_right), sequences)
+    ensure_sequence((run_right, short_jump_right, short_jump_right), sequences)
+
+    run_left = first_valid(find_index(combo("B", "LEFT")), find_index(combo("LEFT")))
+    run_jump_left = first_valid(find_index(combo("A", "B", "LEFT")), find_index(combo("A", "LEFT")))
+    short_jump_left = find_index(combo("A", "LEFT"))
+    ensure_sequence((run_left, run_left, run_jump_left, run_jump_left), sequences)
+    ensure_sequence((run_left, short_jump_left, short_jump_left), sequences)
+
+    neutral_jump = first_valid(find_index(combo("A")), short_jump_right, short_jump_left)
+    if neutral_jump is not None:
+        ensure_sequence((neutral_jump, neutral_jump), sequences)
+
+    down = first_valid(find_index(combo("DOWN")), find_index(combo("RIGHT", "DOWN")))
+    if down is not None:
+        ensure_sequence((down, down, down, down), sequences)
+
+    return tuple(sequences)
+
+
+
+
 
 
 
@@ -83,10 +133,18 @@ def build_env(
     env = DiscreteActionWrapper(env, action_set=action_set)
     if exploration_epsilon > 0.0:
         skill_actions = _derive_skill_action_indices(action_set)
+        skill_sequences = _derive_skill_sequences(action_set)
+        stagnation_threshold = 120
+        if stagnation_max_frames:
+            candidate = max(60, int(stagnation_max_frames) // 4)
+            stagnation_threshold = max(60, min(candidate, int(stagnation_max_frames)))
         env = EpsilonRandomActionWrapper(
             env,
             exploration_epsilon,
             skill_actions=skill_actions,
+            skill_sequences=skill_sequences,
+            stagnation_threshold=stagnation_threshold,
+            stagnation_boost=0.5,
         )
     if max_episode_steps:
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)

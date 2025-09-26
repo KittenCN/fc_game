@@ -90,6 +90,12 @@ class NESGymEnv(gym.Env):
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
 
+    @property
+    def stagnation_counter(self) -> int:
+        """Expose current stagnation frame count for wrappers."""
+        return int(self._stagnation_counter)
+
+
     # Gym API ---------------------------------------------------------------
     def reset(self, *, seed: int | None = None, options: dict | None = None):  # type: ignore[override]
         super().reset(seed=seed)

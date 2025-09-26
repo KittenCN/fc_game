@@ -41,6 +41,10 @@ def make_super_mario_progress_reward(
     stagnation_penalty: float = 10.0,
     milestone_scale: float = 0.02,
     idle_decay_penalty: float = 0.2,
+    stagnation_escape_threshold: int = 180,
+    stagnation_escape_bonus: float = 12.0,
+    micro_progress_bonus: float = 0.3,
+    powerup_bonus: float = 15.0,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -50,6 +54,7 @@ def make_super_mario_progress_reward(
         "prev_score": None,
         "best_x": 0,
         "stagnation_steps": 0,
+        "prev_player_state": None,
     }
 
     def on_reset() -> None:
@@ -58,6 +63,7 @@ def make_super_mario_progress_reward(
         state["prev_score"] = None
         state["best_x"] = 0
         state["stagnation_steps"] = 0
+        state["prev_player_state"] = None
 
     def shaper(context: RewardContext) -> float:
         metrics = context.info.get("metrics", {})
@@ -66,7 +72,11 @@ def make_super_mario_progress_reward(
         x_pos = metrics.get("mario_x")
         if x_pos is None:
             x_pos = int(ram[0x6D]) * 256 + int(ram[0x86])
+
         progress_bonus = 0.0
+        micro_progress_value = 0.0
+        escape_bonus_value = 0.0
+        prev_stagnation = int(state.get("stagnation_steps", 0))
         if state["prev_x"] is not None:
             delta_x = x_pos - int(state["prev_x"])
             if delta_x >= 0:
@@ -74,9 +84,14 @@ def make_super_mario_progress_reward(
             else:
                 progress_bonus = delta_x * backward_penalty
             if delta_x > 0:
+                if delta_x <= 2:
+                    micro_progress_value = micro_progress_bonus
+                if prev_stagnation >= stagnation_escape_threshold:
+                    escape_scale = 1.0 + min(delta_x, 4) / 4.0
+                    escape_bonus_value = stagnation_escape_bonus * escape_scale
                 state["stagnation_steps"] = 0
             else:
-                state["stagnation_steps"] += 1
+                state["stagnation_steps"] = prev_stagnation + 1
         else:
             state["stagnation_steps"] = 0
         state["prev_x"] = x_pos
@@ -107,6 +122,16 @@ def make_super_mario_progress_reward(
                 time_penalty_value = -elapsed * time_penalty
         state["prev_timer"] = timer
 
+        player_state = metrics.get("player_state")
+        powerup_reward = 0.0
+        if (
+            player_state is not None
+            and state["prev_player_state"] is not None
+            and player_state > state["prev_player_state"]
+        ):
+            powerup_reward = powerup_bonus
+        state["prev_player_state"] = player_state
+
         idle_penalty_value = -idle_decay_penalty * (state["stagnation_steps"] // 120)
 
         shaped_reward = (
@@ -116,6 +141,9 @@ def make_super_mario_progress_reward(
             + time_penalty_value
             + milestone_bonus
             + idle_penalty_value
+            + micro_progress_value
+            + escape_bonus_value
+            + powerup_reward
         )
 
         if context.info.get("stagnation_truncated"):
@@ -140,6 +168,10 @@ def make_super_mario_dense_reward(
     death_penalty: float = -50.0,
     score_scale: float = 0.02,
     stagnation_penalty: float = 20.0,
+    stagnation_escape_threshold: int = 150,
+    stagnation_escape_bonus: float = 20.0,
+    micro_progress_bonus: float = 0.6,
+    powerup_bonus: float = 20.0,
 ) -> RewardConfig:
     """Aggressive shaping that heavily favours forward motion and exploration."""
 
@@ -151,6 +183,7 @@ def make_super_mario_dense_reward(
         "idle_frames": 0,
         "last_world": None,
         "last_stage": None,
+        "prev_player_state": None,
     }
 
     def on_reset() -> None:
@@ -162,6 +195,7 @@ def make_super_mario_dense_reward(
             "idle_frames": 0,
             "last_world": None,
             "last_stage": None,
+            "prev_player_state": None,
         })
 
     def shaper(context: RewardContext) -> float:
@@ -172,19 +206,28 @@ def make_super_mario_dense_reward(
         if x_pos is None:
             x_pos = int(ram[0x6D]) * 256 + int(ram[0x86])
 
-        prev_x = state["prev_x"] if state["prev_x"] is not None else x_pos
-        delta_x = x_pos - int(prev_x)
+        prev_idle = int(state["idle_frames"])
+        if state["prev_x"] is None:
+            state["prev_x"] = x_pos
+        delta_x = x_pos - int(state["prev_x"])
         state["prev_x"] = x_pos
 
+        progress = 0.0
+        micro_progress_value = 0.0
+        escape_bonus_value = 0.0
         if delta_x > 0:
             progress = delta_x * progress_scale
+            if delta_x <= 3:
+                micro_progress_value = micro_progress_bonus
+            if prev_idle >= stagnation_escape_threshold:
+                escape_scale = 1.0 + min(delta_x, 6) / 6.0
+                escape_bonus_value = stagnation_escape_bonus * escape_scale
             state["idle_frames"] = 0
         elif delta_x < 0:
             progress = delta_x * backward_penalty
-            state["idle_frames"] += 1
+            state["idle_frames"] = prev_idle + 1
         else:
-            progress = 0.0
-            state["idle_frames"] += 1
+            state["idle_frames"] = prev_idle + 1
 
         idle_pen = 0.0
         if state["idle_frames"] >= idle_threshold:
@@ -218,6 +261,16 @@ def make_super_mario_dense_reward(
                 time_penalty_value = -elapsed * time_penalty
         state["prev_timer"] = timer
 
+        player_state = metrics.get("player_state")
+        powerup_reward = 0.0
+        if (
+            player_state is not None
+            and state["prev_player_state"] is not None
+            and player_state > state["prev_player_state"]
+        ):
+            powerup_reward = powerup_bonus
+        state["prev_player_state"] = player_state
+
         world = metrics.get("world")
         stage = metrics.get("stage")
         level_bonus = 0.0
@@ -231,7 +284,18 @@ def make_super_mario_dense_reward(
                 state["last_world"] = world
                 state["last_stage"] = stage
 
-        shaped = context.base_reward + progress + milestone + score_bonus + time_penalty_value + idle_pen + level_bonus
+        shaped = (
+            context.base_reward
+            + progress
+            + milestone
+            + score_bonus
+            + time_penalty_value
+            + idle_pen
+            + level_bonus
+            + micro_progress_value
+            + escape_bonus_value
+            + powerup_reward
+        )
 
         if context.info.get("stagnation_truncated"):
             shaped -= stagnation_penalty

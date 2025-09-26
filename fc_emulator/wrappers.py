@@ -1,6 +1,7 @@
 """Environment wrappers and action presets for NES RL training."""
 from __future__ import annotations
 
+from collections import deque
 from typing import Iterable, Sequence, Tuple
 
 import gymnasium as gym
@@ -162,8 +163,9 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return self._action_set.index(combo)
 
 
+
 class EpsilonRandomActionWrapper(gym.ActionWrapper):
-    """Injects epsilon-greedy exploration for discrete action spaces."""
+    """Inject epsilon-greedy exploration while biasing useful macro actions."""
 
     def __init__(
         self,
@@ -171,22 +173,53 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         epsilon: float,
         *,
         skill_actions: tuple[int, ...] | None = None,
+        skill_sequences: tuple[tuple[int, ...], ...] | None = None,
         skill_bias: float = 0.7,
+        stagnation_boost: float = 0.3,
+        stagnation_threshold: int = 120,
     ) -> None:
         super().__init__(env)
         if not isinstance(env.action_space, gym.spaces.Discrete):
             raise ValueError("EpsilonRandomActionWrapper requires a discrete action space")
         self.epsilon = max(0.0, float(epsilon))
         self._skill_actions: tuple[int, ...] = tuple(skill_actions or ())
+        self._skill_sequences: tuple[tuple[int, ...], ...] = tuple(seq for seq in (skill_sequences or ()) if seq)
         self._skill_bias = float(min(max(skill_bias, 0.0), 1.0))
+        self._stagnation_boost = max(0.0, float(stagnation_boost))
+        self._stagnation_threshold = max(1, int(stagnation_threshold))
+        self._macro_queue = deque()
+
+    def _current_stagnation(self) -> int:
+        unwrapped = getattr(self.env, "unwrapped", self.env)
+        return int(getattr(unwrapped, "stagnation_counter", 0))
+
+    def _queue_macro(self, sequence: tuple[int, ...]) -> int:
+        if not sequence:
+            return int(self.action_space.sample())
+        if len(sequence) > 1:
+            self._macro_queue.extend(sequence[1:])
+        return int(sequence[0])
 
     def action(self, action: int) -> int:  # type: ignore[override]
-        if self.epsilon <= 0.0:
+        if self._macro_queue:
+            return int(self._macro_queue.popleft())
+
+        stagnation = self._current_stagnation()
+        effective_epsilon = self.epsilon
+        if self.epsilon > 0.0 and stagnation >= self._stagnation_threshold and self._stagnation_boost > 0.0:
+            ratio = stagnation / float(self._stagnation_threshold)
+            effective_epsilon = min(1.0, self.epsilon + ratio * self._stagnation_boost)
+
+        if effective_epsilon <= 0.0 or self.np_random.random() >= effective_epsilon:
             return action
-        if self.np_random.random() >= self.epsilon:
-            return action
+
+        if self._skill_sequences and stagnation >= self._stagnation_threshold and self.np_random.random() < self._skill_bias:
+            sequence = self.np_random.choice(self._skill_sequences)
+            return self._queue_macro(sequence)
+
         if self._skill_actions and self.np_random.random() < self._skill_bias:
             return int(self.np_random.choice(self._skill_actions))
+
         return int(self.action_space.sample())
 
     def set_exploration_epsilon(self, epsilon: float) -> None:
@@ -196,3 +229,9 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._skill_actions = tuple(actions)
         if bias is not None:
             self._skill_bias = float(min(max(bias, 0.0), 1.0))
+
+    def set_skill_sequences(self, sequences: tuple[tuple[int, ...], ...], *, bias: float | None = None) -> None:
+        self._skill_sequences = tuple(seq for seq in sequences if seq)
+        if bias is not None:
+            self._skill_bias = float(min(max(bias, 0.0), 1.0))
+
