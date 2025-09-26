@@ -214,7 +214,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             return action
 
         if self._skill_sequences and stagnation >= self._stagnation_threshold and self.np_random.random() < self._skill_bias:
-            sequence = self.np_random.choice(self._skill_sequences)
+            idx = int(self.np_random.integers(len(self._skill_sequences)))
+            sequence = self._skill_sequences[idx]
             return self._queue_macro(sequence)
 
         if self._skill_actions and self.np_random.random() < self._skill_bias:
