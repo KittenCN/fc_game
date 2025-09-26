@@ -15,6 +15,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
     ) from exc
 
 from .callbacks import EpisodeLogCallback
+from .policies import POLICY_PRESETS
 from .rewards import REWARD_PRESETS
 from .rl_utils import (
     ALGO_MAP,
@@ -42,7 +43,7 @@ def main() -> None:
     parser.add_argument("--observation-type", choices=["rgb", "gray"], default="gray")
     parser.add_argument(
         "--action-set",
-        help="Preset name (default/simple) or custom combos like 'RIGHT;A,RIGHT;B'",
+        help="Preset name (default/simple/smb_forward) or custom combos like 'RIGHT;A,RIGHT;B'",
     )
     parser.add_argument(
         "--vec-env",
@@ -63,6 +64,15 @@ def main() -> None:
         default="none",
         help="Reward shaping preset (default: none).",
     )
+    parser.add_argument(
+        "--policy-preset",
+        choices=sorted(POLICY_PRESETS.keys()),
+        default="baseline",
+        help="Policy/network configuration preset (mario_large increases GPU load).",
+    )
+    parser.add_argument("--policy", help="Override policy id (default derived from preset)")
+    parser.add_argument("--n-steps", type=int, help="Override PPO/A2C rollout length")
+    parser.add_argument("--batch-size", type=int, help="Override mini-batch size")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
     parser.add_argument("--log-dir", default="runs", help="Directory for checkpoints and TensorBoard logs")
@@ -83,6 +93,16 @@ def main() -> None:
     action_set = parse_action_set(args.action_set)
     resize_shape = tuple(args.resize) if args.resize else None
     reward_factory = None if args.reward_profile == "none" else REWARD_PRESETS[args.reward_profile]
+
+    policy_preset = POLICY_PRESETS[args.policy_preset]
+    policy_id = args.policy or policy_preset.policy
+    policy_kwargs = dict(policy_preset.policy_kwargs)
+    algo_kwargs = dict(policy_preset.algo_kwargs)
+
+    if args.n_steps:
+        algo_kwargs["n_steps"] = args.n_steps
+    if args.batch_size:
+        algo_kwargs["batch_size"] = args.batch_size
 
     episode_log_path: Optional[Path] = None
     if args.episode_log and args.episode_log.lower() != "none":
@@ -115,16 +135,18 @@ def main() -> None:
             model.tensorboard_log = tensorboard_log
     else:
         model = algo_cls(
-            "CnnPolicy",
+            policy_id,
             vec_env,
             verbose=1,
             tensorboard_log=tensorboard_log,
             device=args.device,
+            policy_kwargs=policy_kwargs,
+            **algo_kwargs,
         )
 
     callbacks = []
     if args.checkpoint_freq > 0:
-        save_freq = max(1, args.checkpoint_freq // args.num_envs)
+        save_freq = max(1, args.checkpoint_freq // max(1, args.num_envs))
         checkpoint_callback = CheckpointCallback(
             save_freq=save_freq,
             save_path=str(log_dir),
