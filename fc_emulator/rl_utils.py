@@ -99,8 +99,8 @@ def make_vector_env(
     auto_start_max_frames: int = 120,
     auto_start_press_frames: int = 6,
     exploration_epsilon: float = 0.05,
-    stagnation_max_frames: int | None = 600,
-    stagnation_progress_threshold: int = 5,
+    stagnation_max_frames: int | None = 900,
+    stagnation_progress_threshold: int = 1,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)

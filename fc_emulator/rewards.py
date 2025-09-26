@@ -39,6 +39,8 @@ def make_super_mario_progress_reward(
     death_penalty: float = -25.0,
     score_scale: float = 0.01,
     stagnation_penalty: float = 10.0,
+    milestone_scale: float = 0.02,
+    idle_decay_penalty: float = 0.2,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -46,18 +48,21 @@ def make_super_mario_progress_reward(
         "prev_x": None,
         "prev_timer": None,
         "prev_score": None,
+        "best_x": 0,
+        "stagnation_steps": 0,
     }
 
     def on_reset() -> None:
         state["prev_x"] = None
         state["prev_timer"] = None
         state["prev_score"] = None
+        state["best_x"] = 0
+        state["stagnation_steps"] = 0
 
     def shaper(context: RewardContext) -> float:
         metrics = context.info.get("metrics", {})
         ram = context.ram
 
-        # Horizontal progress ------------------------------------------------
         x_pos = metrics.get("mario_x")
         if x_pos is None:
             x_pos = int(ram[0x6D]) * 256 + int(ram[0x86])
@@ -68,9 +73,20 @@ def make_super_mario_progress_reward(
                 progress_bonus = delta_x * progress_scale
             else:
                 progress_bonus = delta_x * backward_penalty
+            if delta_x > 0:
+                state["stagnation_steps"] = 0
+            else:
+                state["stagnation_steps"] += 1
+        else:
+            state["stagnation_steps"] = 0
         state["prev_x"] = x_pos
 
-        # Score changes ------------------------------------------------------
+        milestone_bonus = 0.0
+        best_x = int(state.get("best_x", 0))
+        if x_pos > best_x:
+            milestone_bonus = (x_pos - best_x) * milestone_scale
+            state["best_x"] = x_pos
+
         score = metrics.get("score")
         if score is None:
             score = _decode_score(ram)
@@ -81,7 +97,6 @@ def make_super_mario_progress_reward(
                 score_bonus = delta_score * score_scale
         state["prev_score"] = score
 
-        # Timer decay penalizes stalling -------------------------------------
         timer = metrics.get("timer")
         if timer is None:
             timer = _decode_timer(ram)
@@ -92,7 +107,16 @@ def make_super_mario_progress_reward(
                 time_penalty_value = -elapsed * time_penalty
         state["prev_timer"] = timer
 
-        shaped_reward = context.base_reward + progress_bonus + score_bonus + time_penalty_value
+        idle_penalty_value = -idle_decay_penalty * (state["stagnation_steps"] // 120)
+
+        shaped_reward = (
+            context.base_reward
+            + progress_bonus
+            + score_bonus
+            + time_penalty_value
+            + milestone_bonus
+            + idle_penalty_value
+        )
 
         if context.info.get("stagnation_truncated"):
             shaped_reward -= stagnation_penalty

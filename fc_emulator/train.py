@@ -84,13 +84,13 @@ def main() -> None:
     parser.add_argument(
         "--stagnation-frames",
         type=int,
-        default=600,
+        default=900,
         help="End episodes early if no forward progress for this many frames (0 disables).",
     )
     parser.add_argument(
         "--stagnation-progress",
         type=int,
-        default=5,
+        default=1,
         help="Minimum forward distance (in mario_x) treated as real progress when tracking stagnation.",
     )
     parser.add_argument(
@@ -183,6 +183,7 @@ def main() -> None:
         auto_start=auto_start,
         auto_start_max_frames=auto_start_max_frames,
         auto_start_press_frames=auto_start_press_frames,
+        exploration_epsilon=exploration_epsilon,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
     )

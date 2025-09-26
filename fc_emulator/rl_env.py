@@ -60,8 +60,8 @@ class NESGymEnv(gym.Env):
         auto_start: bool = True,
         auto_start_max_frames: int = 120,
         auto_start_press_frames: int = 6,
-        stagnation_max_frames: int | None = 600,
-        stagnation_progress_threshold: int = 5,
+        stagnation_max_frames: int | None = 900,
+        stagnation_progress_threshold: int = 1,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
