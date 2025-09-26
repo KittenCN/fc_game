@@ -49,6 +49,18 @@ ACTION_PRESETS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("A", "LEFT"),
         ("START",),
     ),
+    "smb_forward": (
+        ("RIGHT",),
+        ("A", "RIGHT"),
+        ("B", "RIGHT"),
+        ("A", "B", "RIGHT"),
+        ("RIGHT", "DOWN"),
+        ("RIGHT", "UP"),
+        ("A",),
+        ("B",),
+        ("A", "B"),
+        (),
+    ),
 }
 
 _INDEX_FOR_BUTTON = {button: idx for idx, button in enumerate(BUTTON_ORDER)}

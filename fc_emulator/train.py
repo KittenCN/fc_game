@@ -14,6 +14,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
     ) from exc
 
+from .callbacks import EpisodeLogCallback
 from .rewards import REWARD_PRESETS
 from .rl_utils import (
     ALGO_MAP,
@@ -67,6 +68,11 @@ def main() -> None:
     parser.add_argument("--log-dir", default="runs", help="Directory for checkpoints and TensorBoard logs")
     parser.add_argument("--checkpoint-freq", type=int, default=200_000)
     parser.add_argument("--tensorboard", action="store_true", help="Enable TensorBoard logging")
+    parser.add_argument(
+        "--episode-log",
+        default="episode_log.jsonl",
+        help="Per-episode JSONL filename (relative to log dir). Use 'none' to disable.",
+    )
     args = parser.parse_args()
 
     rom_path = resolve_existing_path(args.rom, "ROM")
@@ -77,6 +83,11 @@ def main() -> None:
     action_set = parse_action_set(args.action_set)
     resize_shape = tuple(args.resize) if args.resize else None
     reward_factory = None if args.reward_profile == "none" else REWARD_PRESETS[args.reward_profile]
+
+    episode_log_path: Optional[Path] = None
+    if args.episode_log and args.episode_log.lower() != "none":
+        ep_path = Path(args.episode_log)
+        episode_log_path = ep_path if ep_path.is_absolute() else log_dir / ep_path
 
     vec_env = make_vector_env(
         str(rom_path),
@@ -100,7 +111,7 @@ def main() -> None:
     if checkpoint_path:
         print(f"Loading checkpoint: {checkpoint_path.name}")
         model = algo_cls.load(str(checkpoint_path), env=vec_env, device=args.device)
-        if args.tensorboard and hasattr(model, "tensorboard_log"):
+        if tensorboard_log and hasattr(model, "tensorboard_log"):
             model.tensorboard_log = tensorboard_log
     else:
         model = algo_cls(
@@ -111,6 +122,7 @@ def main() -> None:
             device=args.device,
         )
 
+    callbacks = []
     if args.checkpoint_freq > 0:
         save_freq = max(1, args.checkpoint_freq // args.num_envs)
         checkpoint_callback = CheckpointCallback(
@@ -120,9 +132,10 @@ def main() -> None:
             save_replay_buffer=False,
             save_vecnormalize=False,
         )
-        callbacks = [checkpoint_callback]
-    else:
-        callbacks = []
+        callbacks.append(checkpoint_callback)
+
+    if episode_log_path:
+        callbacks.append(EpisodeLogCallback(episode_log_path))
 
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None)
 
@@ -136,4 +149,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
