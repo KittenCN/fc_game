@@ -20,20 +20,18 @@ except ImportError:  # pragma: no cover - optional dependency
     Image = None
 
 # Minimal yet expressive set of button combinations for action discretization.
-DEFAULT_ACTION_SET: tuple[tuple[str, ...], ...] = (
+DEFAULT_ACTION_SET: tuple[tuple[str, ...], ...] = (  # More SMB-focused default
     (),
-    ("A",),
-    ("B",),
-    ("UP",),
-    ("DOWN",),
     ("LEFT",),
     ("RIGHT",),
-    ("A", "RIGHT"),
     ("A", "LEFT"),
-    ("B", "RIGHT"),
+    ("A", "RIGHT"),
     ("B", "LEFT"),
-    ("UP", "A"),
-    ("DOWN", "A"),
+    ("B", "RIGHT"),
+    ("A", "B", "LEFT"),
+    ("A", "B", "RIGHT"),
+    ("DOWN",),
+    ("UP",),
     ("START",),
 )
 
@@ -167,16 +165,34 @@ class DiscreteActionWrapper(gym.ActionWrapper):
 class EpsilonRandomActionWrapper(gym.ActionWrapper):
     """Injects epsilon-greedy exploration for discrete action spaces."""
 
-    def __init__(self, env: gym.Env, epsilon: float) -> None:
+    def __init__(
+        self,
+        env: gym.Env,
+        epsilon: float,
+        *,
+        skill_actions: tuple[int, ...] | None = None,
+        skill_bias: float = 0.7,
+    ) -> None:
         super().__init__(env)
         if not isinstance(env.action_space, gym.spaces.Discrete):
             raise ValueError("EpsilonRandomActionWrapper requires a discrete action space")
         self.epsilon = max(0.0, float(epsilon))
+        self._skill_actions: tuple[int, ...] = tuple(skill_actions or ())
+        self._skill_bias = float(min(max(skill_bias, 0.0), 1.0))
 
     def action(self, action: int) -> int:  # type: ignore[override]
-        if self.epsilon > 0.0 and self.np_random.random() < self.epsilon:
-            return int(self.action_space.sample())
-        return action
+        if self.epsilon <= 0.0:
+            return action
+        if self.np_random.random() >= self.epsilon:
+            return action
+        if self._skill_actions and self.np_random.random() < self._skill_bias:
+            return int(self.np_random.choice(self._skill_actions))
+        return int(self.action_space.sample())
 
     def set_exploration_epsilon(self, epsilon: float) -> None:
         self.epsilon = max(0.0, float(epsilon))
+
+    def set_skill_actions(self, actions: tuple[int, ...], *, bias: float | None = None) -> None:
+        self._skill_actions = tuple(actions)
+        if bias is not None:
+            self._skill_bias = float(min(max(bias, 0.0), 1.0))

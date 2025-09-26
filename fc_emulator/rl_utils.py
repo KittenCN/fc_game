@@ -30,6 +30,23 @@ ALGO_MAP = {
     "a2c": A2C,
 }
 
+def _derive_skill_action_indices(action_set: Sequence[Sequence[str]]) -> tuple[int, ...]:
+    skill_indices: list[int] = []
+    for idx, combo in enumerate(action_set):
+        normalized = {btn.upper() for btn in combo}
+        # An empty combo is not a skill
+        if not normalized:
+            continue
+        # Any jump is a skill
+        if "A" in normalized:
+            skill_indices.append(idx)
+        # Running is a skill, especially when combined with other buttons
+        elif "B" in normalized and "RIGHT" in normalized:
+            skill_indices.append(idx)
+    return tuple(skill_indices)
+
+
+
 
 def build_env(
     rom_path: str,
@@ -65,7 +82,12 @@ def build_env(
         env = ResizeObservationWrapper(env, resize_shape)
     env = DiscreteActionWrapper(env, action_set=action_set)
     if exploration_epsilon > 0.0:
-        env = EpsilonRandomActionWrapper(env, exploration_epsilon)
+        skill_actions = _derive_skill_action_indices(action_set)
+        env = EpsilonRandomActionWrapper(
+            env,
+            exploration_epsilon,
+            skill_actions=skill_actions,
+        )
     if max_episode_steps:
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.RecordEpisodeStatistics(env)
