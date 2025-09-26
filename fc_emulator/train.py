@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
     ) from exc
 
-from .callbacks import EpisodeLogCallback, ExplorationEpsilonCallback
+from .callbacks import EpisodeLogCallback, ExplorationEpsilonCallback, EntropyCoefficientCallback
 from .policies import POLICY_PRESETS
 from .rewards import REWARD_PRESETS
 from .rl_utils import (
@@ -111,6 +111,22 @@ def main() -> None:
         help="Timesteps over which to decay exploration epsilon (0 keeps it constant).",
     )
     parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        help="Initial entropy regularization coefficient (default mirrors PPO).",
+    )
+    parser.add_argument(
+        "--entropy-final-coef",
+        type=float,
+        help="Final entropy coefficient after linear decay (defaults to initial).",
+    )
+    parser.add_argument(
+        "--entropy-decay-steps",
+        type=int,
+        default=0,
+        help="Timesteps over which to decay entropy coefficient (0 keeps it constant).",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
@@ -163,6 +179,19 @@ def main() -> None:
         algo_kwargs["n_steps"] = args.n_steps
     if args.batch_size:
         algo_kwargs["batch_size"] = args.batch_size
+
+    entropy_initial = args.entropy_coef if args.entropy_coef is not None else algo_kwargs.get("ent_coef")
+    if entropy_initial is None:
+        entropy_initial = 0.01
+    entropy_initial = float(entropy_initial)
+    algo_kwargs["ent_coef"] = entropy_initial
+
+    entropy_final = args.entropy_final_coef if args.entropy_final_coef is not None else entropy_initial
+    entropy_final = float(entropy_final)
+
+    entropy_decay_steps = max(0, args.entropy_decay_steps)
+    if entropy_decay_steps == 0:
+        algo_kwargs["ent_coef"] = entropy_final
 
     episode_log_path: Optional[Path] = None
     if args.episode_log and args.episode_log.lower() != "none":
@@ -217,6 +246,14 @@ def main() -> None:
                 initial_epsilon=exploration_epsilon,
                 final_epsilon=exploration_final_epsilon,
                 decay_steps=exploration_decay_steps,
+            )
+        )
+    if entropy_decay_steps > 0 and abs(entropy_final - entropy_initial) > 1e-9:
+        callbacks.append(
+            EntropyCoefficientCallback(
+                initial_entropy=entropy_initial,
+                final_entropy=entropy_final,
+                decay_steps=entropy_decay_steps,
             )
         )
     if args.checkpoint_freq > 0:

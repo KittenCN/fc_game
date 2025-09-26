@@ -69,7 +69,7 @@ class EpisodeLogCallback(BaseCallback):
         self._buffer.clear()
 
 
-__all__ = ["EpisodeLogCallback", "ExplorationEpsilonCallback"]
+__all__ = ["EpisodeLogCallback", "ExplorationEpsilonCallback", "EntropyCoefficientCallback"]
 
 
 class ExplorationEpsilonCallback(BaseCallback):
@@ -113,3 +113,40 @@ class ExplorationEpsilonCallback(BaseCallback):
             self._last_value = float(value)
 
 
+
+
+class EntropyCoefficientCallback(BaseCallback):
+    """Linearly anneal the policy entropy coefficient (A3C-style exploration)."""
+
+    def __init__(
+        self,
+        *,
+        initial_entropy: float,
+        final_entropy: float,
+        decay_steps: int,
+    ) -> None:
+        super().__init__()
+        self.initial_entropy = float(initial_entropy)
+        self.final_entropy = float(final_entropy)
+        self.decay_steps = max(0, int(decay_steps))
+        self._last_value: float | None = None
+
+    def _on_training_start(self) -> None:
+        self._apply(self.initial_entropy)
+
+    def _on_step(self) -> bool:
+        if self.decay_steps <= 0:
+            target = self.final_entropy
+        else:
+            fraction = min(1.0, self.num_timesteps / float(self.decay_steps))
+            target = self.initial_entropy + fraction * (self.final_entropy - self.initial_entropy)
+        self._apply(target)
+        return True
+
+    def _apply(self, value: float) -> None:
+        if not hasattr(self.model, "ent_coef"):
+            return
+        if self._last_value is not None and abs(self._last_value - value) < 1e-6:
+            return
+        self.model.ent_coef = float(value)
+        self._last_value = float(value)
