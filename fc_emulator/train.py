@@ -82,6 +82,18 @@ def main() -> None:
         help="Frames to wait after each automatic START press (default: 6).",
     )
     parser.add_argument(
+        "--stagnation-frames",
+        type=int,
+        default=600,
+        help="End episodes early if no forward progress for this many frames (0 disables).",
+    )
+    parser.add_argument(
+        "--stagnation-progress",
+        type=int,
+        default=5,
+        help="Minimum forward distance (in mario_x) treated as real progress when tracking stagnation.",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
@@ -113,6 +125,9 @@ def main() -> None:
     auto_start = not args.disable_auto_start
     auto_start_max_frames = max(1, args.auto_start_max_frames)
     auto_start_press_frames = max(1, args.auto_start_press_frames)
+    stagnation_max_frames = None if args.stagnation_frames <= 0 else args.stagnation_frames
+    stagnation_progress_threshold = max(0, args.stagnation_progress)
+
 
     policy_preset = POLICY_PRESETS[args.policy_preset]
     policy_id = args.policy or policy_preset.policy
@@ -143,6 +158,8 @@ def main() -> None:
         auto_start=auto_start,
         auto_start_max_frames=auto_start_max_frames,
         auto_start_press_frames=auto_start_press_frames,
+        stagnation_max_frames=stagnation_max_frames,
+        stagnation_progress_threshold=stagnation_progress_threshold,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")
@@ -194,3 +211,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

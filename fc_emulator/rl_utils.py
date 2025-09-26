@@ -43,6 +43,8 @@ def build_env(
     auto_start: bool,
     auto_start_max_frames: int,
     auto_start_press_frames: int,
+    stagnation_max_frames: int | None,
+    stagnation_progress_threshold: int,
 ) -> gym.Env:
     reward_cfg = reward_config_factory() if reward_config_factory else None
     env = NESGymEnv(
@@ -54,6 +56,8 @@ def build_env(
         auto_start=auto_start,
         auto_start_max_frames=auto_start_max_frames,
         auto_start_press_frames=auto_start_press_frames,
+        stagnation_max_frames=stagnation_max_frames,
+        stagnation_progress_threshold=stagnation_progress_threshold,
     )
     if resize_shape and observation_type in {"rgb", "gray"}:
         env = ResizeObservationWrapper(env, resize_shape)
@@ -90,6 +94,8 @@ def make_vector_env(
     auto_start: bool = True,
     auto_start_max_frames: int = 120,
     auto_start_press_frames: int = 6,
+    stagnation_max_frames: int | None = 600,
+    stagnation_progress_threshold: int = 5,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
@@ -109,6 +115,8 @@ def make_vector_env(
             auto_start=auto_start,
             auto_start_max_frames=auto_start_max_frames,
             auto_start_press_frames=auto_start_press_frames,
+            stagnation_max_frames=stagnation_max_frames,
+            stagnation_progress_threshold=stagnation_progress_threshold,
         ),
         vec_env_cls=vec_cls,
     )

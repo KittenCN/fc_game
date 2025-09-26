@@ -45,9 +45,12 @@ class EpisodeLogCallback(BaseCallback):
                 "base_reward": float(diagnostics.get("base_reward", 0.0)),
                 "metrics": metrics,
                 "time_limit_truncated": bool(info.get("TimeLimit.truncated", False)),
+                "stagnation_truncated": bool(info.get("stagnation_truncated", False)),
             }
             if "auto_start_presses" in diagnostics:
                 record["auto_start_presses"] = int(diagnostics["auto_start_presses"])
+            if "stagnation_frames" in diagnostics:
+                record["stagnation_frames"] = int(diagnostics["stagnation_frames"])
             self._buffer.append(record)
 
         if len(self._buffer) >= self.flush_every:

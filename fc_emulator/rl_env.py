@@ -60,6 +60,8 @@ class NESGymEnv(gym.Env):
         auto_start: bool = True,
         auto_start_max_frames: int = 120,
         auto_start_press_frames: int = 6,
+        stagnation_max_frames: int | None = 600,
+        stagnation_progress_threshold: int = 5,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
@@ -76,6 +78,14 @@ class NESGymEnv(gym.Env):
         self._start_press_state = ControllerState(START=True)
         self._noop_state = ControllerState()
         self._last_auto_start_presses = 0
+        self._stagnation_max_frames = (
+            None
+            if stagnation_max_frames is None or stagnation_max_frames <= 0
+            else int(stagnation_max_frames)
+        )
+        self._stagnation_progress_threshold = max(0, int(stagnation_progress_threshold))
+        self._stagnation_counter = 0
+        self._last_progress_x: int | None = None
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
@@ -86,10 +96,14 @@ class NESGymEnv(gym.Env):
         if self.reward_config:
             self.reward_config.reset()
         self._episode_steps = 0
+        self._stagnation_counter = 0
+        self._last_progress_x = None
         frame = self.emulator.reset()
         frame, auto_start_presses = self._auto_start_if_needed(frame)
         obs = self._process_observation(frame)
-        metrics = self._extract_metrics_from_ram(self.emulator.get_ram())
+        ram_snapshot = self.emulator.get_ram()
+        metrics = self._extract_metrics_from_ram(ram_snapshot)
+        self._initialize_stagnation(metrics, ram_snapshot)
         info: dict[str, Any] = {
             "metrics": metrics
         }
@@ -106,6 +120,7 @@ class NESGymEnv(gym.Env):
         controller = _to_controller(action)
         total_reward = 0.0
         terminated = False
+        truncated = False
         info: dict[str, Any] = {}
         last_frame = None
 
@@ -115,8 +130,8 @@ class NESGymEnv(gym.Env):
             last_frame = frame
             if step_info:
                 info = step_info
-            terminated = done
             if done:
+                terminated = True
                 break
 
         assert last_frame is not None
@@ -129,26 +144,38 @@ class NESGymEnv(gym.Env):
         merged_info.setdefault("metrics", {}).update(metrics)
         base_reward_value = total_reward
 
+        stagnation_frames: int | None = None
+        if self._stagnation_max_frames is not None and not terminated:
+            triggered, frames = self._update_stagnation(metrics, ram_snapshot)
+            if triggered:
+                truncated = True
+                stagnation_frames = frames
+                merged_info["stagnation_truncated"] = True
+
         if self.reward_config:
             context = RewardContext(
                 frame=last_frame,
                 base_reward=base_reward_value,
                 info=merged_info,
                 ram=ram_snapshot,
-                done=terminated,
+                done=terminated or truncated,
                 step=self._episode_steps,
             )
             total_reward = self.reward_config.compute(context)
-            merged_info.setdefault("diagnostics", {})["base_reward"] = base_reward_value
-            merged_info["diagnostics"]["shaped_reward"] = total_reward
+            diagnostics = merged_info.setdefault("diagnostics", {})
+            diagnostics["base_reward"] = base_reward_value
+            diagnostics["shaped_reward"] = total_reward
+            if stagnation_frames is not None:
+                diagnostics.setdefault("stagnation_frames", stagnation_frames)
+        elif stagnation_frames is not None:
+            merged_info.setdefault("diagnostics", {})["stagnation_frames"] = stagnation_frames
 
         if self.render_mode == "human":
             self._ensure_renderer()
             assert self._renderer is not None
             self._renderer.draw_frame(last_frame)
 
-        return processed, total_reward, terminated, False, merged_info
-
+        return processed, total_reward, terminated, truncated, merged_info
     def render(self):
         if self.render_mode != "human":
             frame = self.emulator.get_screen()
@@ -195,6 +222,47 @@ class NESGymEnv(gym.Env):
                     break
         self._last_auto_start_presses = presses
         return current_frame, presses
+
+    def _initialize_stagnation(self, metrics: dict[str, int], ram: np.ndarray) -> None:
+        if self._stagnation_max_frames is None:
+            self._stagnation_counter = 0
+            self._last_progress_x = None
+            return
+        self._stagnation_counter = 0
+        self._last_progress_x = self._get_mario_x(metrics, ram)
+
+    def _update_stagnation(
+        self, metrics: dict[str, int], ram: np.ndarray
+    ) -> tuple[bool, int | None]:
+        if self._stagnation_max_frames is None:
+            return False, None
+        current_x = self._get_mario_x(metrics, ram)
+        if self._last_progress_x is None:
+            self._last_progress_x = current_x
+            self._stagnation_counter = 0
+            return False, None
+        if current_x > self._last_progress_x:
+            delta = current_x - self._last_progress_x
+            if delta >= self._stagnation_progress_threshold:
+                self._stagnation_counter = 0
+            else:
+                self._stagnation_counter = max(0, self._stagnation_counter - self.frame_skip)
+            self._last_progress_x = max(self._last_progress_x, current_x)
+            return False, None
+        self._stagnation_counter += self.frame_skip
+        if self._stagnation_counter >= self._stagnation_max_frames:
+            triggered_frames = self._stagnation_counter
+            self._stagnation_counter = 0
+            self._last_progress_x = current_x
+            return True, triggered_frames
+        return False, None
+
+    @staticmethod
+    def _get_mario_x(metrics: dict[str, int], ram: np.ndarray) -> int:
+        x_pos = metrics.get("mario_x")
+        if x_pos is None:
+            x_pos = int(ram[0x6D]) * 256 + int(ram[0x86])
+        return int(x_pos)
 
     def _needs_auto_start_press(self) -> bool:
         ram_snapshot = self.emulator.get_ram()
@@ -274,4 +342,3 @@ class NESGymEnv(gym.Env):
     def _ensure_renderer(self) -> None:
         if not self._renderer:
             self._renderer = ScreenRenderer()
-
