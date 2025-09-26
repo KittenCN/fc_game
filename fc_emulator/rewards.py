@@ -159,7 +159,9 @@ def make_super_mario_dense_reward(
 
         idle_pen = 0.0
         if state["idle_frames"] >= idle_threshold:
-            idle_pen = -idle_penalty * (state["idle_frames"] // idle_threshold)
+            multiples = state["idle_frames"] // idle_threshold
+            idle_pen = -idle_penalty * multiples
+            state["idle_frames"] -= idle_threshold * multiples
 
         best_x = int(state["best_x"])
         milestone = 0.0

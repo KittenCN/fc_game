@@ -57,6 +57,9 @@ class NESGymEnv(gym.Env):
         frame_skip: int = 1,
         observation_type: ObservationKind = "rgb",
         reward_config: RewardConfig | None = None,
+        auto_start: bool = True,
+        auto_start_max_frames: int = 120,
+        auto_start_press_frames: int = 6,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
@@ -66,6 +69,13 @@ class NESGymEnv(gym.Env):
         self._renderer: ScreenRenderer | None = None
         self.render_mode = render_mode
         self._episode_steps = 0
+        self.auto_start = auto_start
+        self._auto_start_max_frames = max(1, auto_start_max_frames)
+        self._auto_start_press_frames = max(1, auto_start_press_frames)
+        self._auto_start_timer_threshold = 401
+        self._start_press_state = ControllerState(START=True)
+        self._noop_state = ControllerState()
+        self._last_auto_start_presses = 0
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
@@ -77,10 +87,15 @@ class NESGymEnv(gym.Env):
             self.reward_config.reset()
         self._episode_steps = 0
         frame = self.emulator.reset()
+        frame, auto_start_presses = self._auto_start_if_needed(frame)
         obs = self._process_observation(frame)
+        metrics = self._extract_metrics_from_ram(self.emulator.get_ram())
         info: dict[str, Any] = {
-            "metrics": self._extract_metrics_from_ram(self.emulator.get_ram())
+            "metrics": metrics
         }
+        if auto_start_presses:
+            diagnostics = info.setdefault("diagnostics", {})
+            diagnostics["auto_start_presses"] = auto_start_presses
         if self.render_mode == "human":
             self._ensure_renderer()
             assert self._renderer is not None
@@ -151,6 +166,61 @@ class NESGymEnv(gym.Env):
         super().close()
 
     # Internal helpers -----------------------------------------------------
+    def _auto_start_if_needed(self, frame: np.ndarray) -> tuple[np.ndarray, int]:
+        if not self.auto_start:
+            self._last_auto_start_presses = 0
+            return frame, 0
+        presses = 0
+        frames_spent = 0
+        current_frame = frame
+        while frames_spent < self._auto_start_max_frames and self._needs_auto_start_press():
+            current_frame, _reward, done, _info = self.emulator.step(self._start_press_state)
+            presses += 1
+            frames_spent += 1
+            if done:
+                current_frame = self.emulator.reset()
+                frames_spent = 0
+                continue
+            release_frames = 0
+            while (
+                release_frames < self._auto_start_press_frames
+                and frames_spent < self._auto_start_max_frames
+            ):
+                current_frame, _reward, done, _info = self.emulator.step(self._noop_state)
+                release_frames += 1
+                frames_spent += 1
+                if done:
+                    current_frame = self.emulator.reset()
+                    frames_spent = 0
+                    break
+        self._last_auto_start_presses = presses
+        return current_frame, presses
+
+    def _needs_auto_start_press(self) -> bool:
+        ram_snapshot = self.emulator.get_ram()
+        timer = self._decode_timer_from_ram(ram_snapshot)
+        # Super Mario Bros keeps the timer at 401 on the title screen; it drops once gameplay begins.
+        if timer is None:
+            return False
+        if timer <= self._auto_start_timer_threshold - 1:
+            return False
+        if len(ram_snapshot) > 0x0770:
+            # Known NES gameplay state codes when the level is active (SMB heuristic).
+            game_mode = int(ram_snapshot[0x0770])
+            if game_mode in (0x06, 0x07):
+                return False
+        return True
+
+    @staticmethod
+    def _decode_timer_from_ram(ram: np.ndarray) -> int | None:
+        try:
+            hundreds = int(ram[0x07F8]) & 0x0F
+            tens = int(ram[0x07F9]) & 0x0F
+            ones = int(ram[0x07FA]) & 0x0F
+        except IndexError:
+            return None
+        return hundreds * 100 + tens * 10 + ones
+
     def _step_once(self, controller: ControllerState):
         frame, reward, done, info = self.emulator.step(controller)
         return frame, reward, done, info

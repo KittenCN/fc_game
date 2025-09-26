@@ -40,6 +40,9 @@ def build_env(
     render_mode: str | None,
     resize_shape: tuple[int, int] | None,
     reward_config_factory: Callable[[], RewardConfig | None] | None,
+    auto_start: bool,
+    auto_start_max_frames: int,
+    auto_start_press_frames: int,
 ) -> gym.Env:
     reward_cfg = reward_config_factory() if reward_config_factory else None
     env = NESGymEnv(
@@ -48,6 +51,9 @@ def build_env(
         observation_type=observation_type,
         render_mode=render_mode,
         reward_config=reward_cfg,
+        auto_start=auto_start,
+        auto_start_max_frames=auto_start_max_frames,
+        auto_start_press_frames=auto_start_press_frames,
     )
     if resize_shape and observation_type in {"rgb", "gray"}:
         env = ResizeObservationWrapper(env, resize_shape)
@@ -81,6 +87,9 @@ def make_vector_env(
     resize_shape: tuple[int, int] | None = None,
     vec_env_type: str = "auto",
     reward_config_factory: Callable[[], RewardConfig | None] | None = None,
+    auto_start: bool = True,
+    auto_start_max_frames: int = 120,
+    auto_start_press_frames: int = 6,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
@@ -97,6 +106,9 @@ def make_vector_env(
             render_mode=render_mode,
             resize_shape=resize_shape,
             reward_config_factory=reward_config_factory,
+            auto_start=auto_start,
+            auto_start_max_frames=auto_start_max_frames,
+            auto_start_press_frames=auto_start_press_frames,
         ),
         vec_env_cls=vec_cls,
     )

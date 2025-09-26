@@ -29,6 +29,9 @@ def main() -> None:
     parser.add_argument("--observation-type", choices=["rgb", "gray"], default="gray")
     parser.add_argument("--action-set", help="Preset name (default/simple) or custom combos")
     parser.add_argument("--resize", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), help="Downscale observations (must match training)")
+    parser.add_argument("--disable-auto-start", action="store_true", help="Disable automatically pressing START after each reset.")
+    parser.add_argument("--auto-start-max-frames", type=int, default=120, help="Maximum frames to spend on the start-screen warmup (default: 120).")
+    parser.add_argument("--auto-start-press-frames", type=int, default=6, help="Frames to wait after each automatic START press (default: 6).")
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--deterministic", action="store_true", help="Use deterministic policy for inference")
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
@@ -39,6 +42,9 @@ def main() -> None:
 
     action_set = parse_action_set(args.action_set)
     resize_shape = tuple(args.resize) if args.resize else None
+    auto_start = not args.disable_auto_start
+    auto_start_max_frames = max(1, args.auto_start_max_frames)
+    auto_start_press_frames = max(1, args.auto_start_press_frames)
 
     vec_env = make_vector_env(
         str(rom_path),
@@ -50,6 +56,9 @@ def main() -> None:
         seed=None,
         render_mode="human",
         resize_shape=resize_shape,
+        auto_start=auto_start,
+        auto_start_max_frames=auto_start_max_frames,
+        auto_start_press_frames=auto_start_press_frames,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")

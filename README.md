@@ -38,6 +38,7 @@ python -m fc_emulator.cli --rom path/to/game.nes
    - `--frame-skip` / `--frame-stack` 控制子采样与状态堆叠，兼容 Stable-Baselines3 的 `CnnPolicy`。
    - `--resize HEIGHT WIDTH` 可以在进入策略网络前对观测图像下采样（如 `--resize 84 84`），显著降低计算量并加速训练。
    - `--vec-env subproc` 强制使用多进程采样，使 CPU 多核更充分，默认 `auto` 会在 `--num-envs>1` 时自动启用。
+    - 默认会在 reset 后自动按下 START 按钮跳过标题界面，可用 --disable-auto-start / --auto-start-max-frames / --auto-start-press-frames 调整
    - 增加 `--num-envs` 可以并行运行多个环境，进一步压榨 CPU/GPU 吞吐。
 3. 载入已训练模型并实时推理：
    ```bash
@@ -76,7 +77,3 @@ python -m fc_emulator.cli --rom path/to/game.nes
 - 增加更多动作预设与训练曲线可视化工具。
 
 欢迎根据需要扩展，用于神经网络训练或其它自动化项目。
-
-
-
-

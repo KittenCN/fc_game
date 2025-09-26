@@ -65,6 +65,23 @@ def main() -> None:
         help="Reward shaping preset (default: none).",
     )
     parser.add_argument(
+        "--disable-auto-start",
+        action="store_true",
+        help="Disable automatically pressing START after each reset.",
+    )
+    parser.add_argument(
+        "--auto-start-max-frames",
+        type=int,
+        default=120,
+        help="Maximum frames to spend on the start-screen warmup (default: 120).",
+    )
+    parser.add_argument(
+        "--auto-start-press-frames",
+        type=int,
+        default=6,
+        help="Frames to wait after each automatic START press (default: 6).",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
@@ -93,6 +110,9 @@ def main() -> None:
     action_set = parse_action_set(args.action_set)
     resize_shape = tuple(args.resize) if args.resize else None
     reward_factory = None if args.reward_profile == "none" else REWARD_PRESETS[args.reward_profile]
+    auto_start = not args.disable_auto_start
+    auto_start_max_frames = max(1, args.auto_start_max_frames)
+    auto_start_press_frames = max(1, args.auto_start_press_frames)
 
     policy_preset = POLICY_PRESETS[args.policy_preset]
     policy_id = args.policy or policy_preset.policy
@@ -120,6 +140,9 @@ def main() -> None:
         resize_shape=resize_shape,
         vec_env_type=args.vec_env,
         reward_config_factory=reward_factory,
+        auto_start=auto_start,
+        auto_start_max_frames=auto_start_max_frames,
+        auto_start_press_frames=auto_start_press_frames,
     )
     vec_env = VecTransposeImage(vec_env)
     vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")
