@@ -50,6 +50,7 @@ ACTION_PRESETS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("START",),
     ),
     "smb_forward": (
+        ("START",),
         ("RIGHT",),
         ("A", "RIGHT"),
         ("B", "RIGHT"),
