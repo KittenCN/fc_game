@@ -38,6 +38,7 @@ def make_super_mario_progress_reward(
     time_penalty: float = 0.01,
     death_penalty: float = -25.0,
     score_scale: float = 0.01,
+    stagnation_penalty: float = 10.0,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -93,6 +94,9 @@ def make_super_mario_progress_reward(
 
         shaped_reward = context.base_reward + progress_bonus + score_bonus + time_penalty_value
 
+        if context.info.get("stagnation_truncated"):
+            shaped_reward -= stagnation_penalty
+
         if context.done and context.base_reward <= 0:
             shaped_reward += death_penalty
 
@@ -111,6 +115,7 @@ def make_super_mario_dense_reward(
     time_penalty: float = 0.02,
     death_penalty: float = -50.0,
     score_scale: float = 0.02,
+    stagnation_penalty: float = 20.0,
 ) -> RewardConfig:
     """Aggressive shaping that heavily favours forward motion and exploration."""
 
@@ -203,6 +208,9 @@ def make_super_mario_dense_reward(
                 state["last_stage"] = stage
 
         shaped = context.base_reward + progress + milestone + score_bonus + time_penalty_value + idle_pen + level_bonus
+
+        if context.info.get("stagnation_truncated"):
+            shaped -= stagnation_penalty
 
         if context.done and context.base_reward <= 0:
             shaped += death_penalty

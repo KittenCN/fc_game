@@ -22,6 +22,7 @@ from fc_emulator.wrappers import (
     DiscreteActionWrapper,
     DEFAULT_ACTION_SET,
     ResizeObservationWrapper,
+    EpsilonRandomActionWrapper,
 )
 
 ALGO_MAP = {
@@ -43,6 +44,7 @@ def build_env(
     auto_start: bool,
     auto_start_max_frames: int,
     auto_start_press_frames: int,
+    exploration_epsilon: float,
     stagnation_max_frames: int | None,
     stagnation_progress_threshold: int,
 ) -> gym.Env:
@@ -62,6 +64,8 @@ def build_env(
     if resize_shape and observation_type in {"rgb", "gray"}:
         env = ResizeObservationWrapper(env, resize_shape)
     env = DiscreteActionWrapper(env, action_set=action_set)
+    if exploration_epsilon > 0.0:
+        env = EpsilonRandomActionWrapper(env, exploration_epsilon)
     if max_episode_steps:
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -94,6 +98,7 @@ def make_vector_env(
     auto_start: bool = True,
     auto_start_max_frames: int = 120,
     auto_start_press_frames: int = 6,
+    exploration_epsilon: float = 0.05,
     stagnation_max_frames: int | None = 600,
     stagnation_progress_threshold: int = 5,
 ) -> VecEnv:
@@ -115,6 +120,7 @@ def make_vector_env(
             auto_start=auto_start,
             auto_start_max_frames=auto_start_max_frames,
             auto_start_press_frames=auto_start_press_frames,
+            exploration_epsilon=exploration_epsilon,
             stagnation_max_frames=stagnation_max_frames,
             stagnation_progress_threshold=stagnation_progress_threshold,
         ),

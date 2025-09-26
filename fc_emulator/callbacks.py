@@ -69,4 +69,47 @@ class EpisodeLogCallback(BaseCallback):
         self._buffer.clear()
 
 
-__all__ = ["EpisodeLogCallback"]
+__all__ = ["EpisodeLogCallback", "ExplorationEpsilonCallback"]
+
+
+class ExplorationEpsilonCallback(BaseCallback):
+    """Linearly anneal epsilon for EpsilonRandomActionWrapper."""
+
+    def __init__(
+        self,
+        *,
+        initial_epsilon: float,
+        final_epsilon: float,
+        decay_steps: int,
+    ) -> None:
+        super().__init__()
+        self.initial_epsilon = max(0.0, float(initial_epsilon))
+        self.final_epsilon = max(0.0, float(final_epsilon))
+        self.decay_steps = max(0, int(decay_steps))
+        self._last_value: float | None = None
+
+    def _on_training_start(self) -> None:
+        self._apply(self.initial_epsilon)
+
+    def _on_step(self) -> bool:
+        if self.decay_steps <= 0:
+            target = self.final_epsilon
+        else:
+            fraction = min(1.0, self.num_timesteps / float(self.decay_steps))
+            target = self.initial_epsilon + fraction * (self.final_epsilon - self.initial_epsilon)
+        self._apply(target)
+        return True
+
+    def _apply(self, value: float) -> None:
+        if self.training_env is None:
+            return
+        if self._last_value is not None and abs(self._last_value - value) < 1e-6:
+            return
+        try:
+            self.training_env.env_method("set_exploration_epsilon", float(value))
+        except Exception:
+            pass
+        else:
+            self._last_value = float(value)
+
+

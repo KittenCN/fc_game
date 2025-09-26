@@ -57,9 +57,14 @@ ACTION_PRESETS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("A", "B", "RIGHT"),
         ("RIGHT", "DOWN"),
         ("RIGHT", "UP"),
+        ("DOWN",),
         ("A",),
         ("B",),
         ("A", "B"),
+        ("LEFT",),
+        ("A", "LEFT"),
+        ("B", "LEFT"),
+        ("A", "B", "LEFT"),
         (),
     ),
 }
@@ -157,3 +162,21 @@ class DiscreteActionWrapper(gym.ActionWrapper):
     def reverse_action(self, action: np.ndarray) -> int:
         combo = tuple(btn for idx, btn in enumerate(BUTTON_ORDER) if action[idx])
         return self._action_set.index(combo)
+
+
+class EpsilonRandomActionWrapper(gym.ActionWrapper):
+    """Injects epsilon-greedy exploration for discrete action spaces."""
+
+    def __init__(self, env: gym.Env, epsilon: float) -> None:
+        super().__init__(env)
+        if not isinstance(env.action_space, gym.spaces.Discrete):
+            raise ValueError("EpsilonRandomActionWrapper requires a discrete action space")
+        self.epsilon = max(0.0, float(epsilon))
+
+    def action(self, action: int) -> int:  # type: ignore[override]
+        if self.epsilon > 0.0 and self.np_random.random() < self.epsilon:
+            return int(self.action_space.sample())
+        return action
+
+    def set_exploration_epsilon(self, epsilon: float) -> None:
+        self.epsilon = max(0.0, float(epsilon))

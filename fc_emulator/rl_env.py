@@ -151,6 +151,8 @@ class NESGymEnv(gym.Env):
                 truncated = True
                 stagnation_frames = frames
                 merged_info["stagnation_truncated"] = True
+        if stagnation_frames is not None:
+            merged_info["stagnation_frames"] = stagnation_frames
 
         if self.reward_config:
             context = RewardContext(

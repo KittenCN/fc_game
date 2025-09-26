@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
     ) from exc
 
-from .callbacks import EpisodeLogCallback
+from .callbacks import EpisodeLogCallback, ExplorationEpsilonCallback
 from .policies import POLICY_PRESETS
 from .rewards import REWARD_PRESETS
 from .rl_utils import (
@@ -94,6 +94,23 @@ def main() -> None:
         help="Minimum forward distance (in mario_x) treated as real progress when tracking stagnation.",
     )
     parser.add_argument(
+        "--exploration-epsilon",
+        type=float,
+        default=0.05,
+        help="Probability of forcing a random discrete action (0 disables).",
+    )
+    parser.add_argument(
+        "--exploration-final-epsilon",
+        type=float,
+        help="Final epsilon after decay (defaults to initial epsilon).",
+    )
+    parser.add_argument(
+        "--exploration-decay-steps",
+        type=int,
+        default=500_000,
+        help="Timesteps over which to decay exploration epsilon (0 keeps it constant).",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
@@ -128,6 +145,14 @@ def main() -> None:
     stagnation_max_frames = None if args.stagnation_frames <= 0 else args.stagnation_frames
     stagnation_progress_threshold = max(0, args.stagnation_progress)
 
+    exploration_epsilon = max(0.0, args.exploration_epsilon)
+    exploration_final_epsilon = args.exploration_final_epsilon
+    if exploration_final_epsilon is None:
+        exploration_final_epsilon = exploration_epsilon
+    exploration_final_epsilon = max(0.0, exploration_final_epsilon)
+    exploration_decay_steps = max(0, args.exploration_decay_steps)
+    if exploration_decay_steps == 0:
+        exploration_epsilon = exploration_final_epsilon
 
     policy_preset = POLICY_PRESETS[args.policy_preset]
     policy_id = args.policy or policy_preset.policy
@@ -185,6 +210,14 @@ def main() -> None:
         )
 
     callbacks = []
+    if exploration_decay_steps > 0 and abs(exploration_final_epsilon - exploration_epsilon) > 1e-9:
+        callbacks.append(
+            ExplorationEpsilonCallback(
+                initial_epsilon=exploration_epsilon,
+                final_epsilon=exploration_final_epsilon,
+                decay_steps=exploration_decay_steps,
+            )
+        )
     if args.checkpoint_freq > 0:
         save_freq = max(1, args.checkpoint_freq // max(1, args.num_envs))
         checkpoint_callback = CheckpointCallback(

@@ -64,6 +64,7 @@ def main() -> None:
         auto_start=auto_start,
         auto_start_max_frames=auto_start_max_frames,
         auto_start_press_frames=auto_start_press_frames,
+        exploration_epsilon=0.0,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
     )
