@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -21,37 +22,89 @@ class EpisodeLogCallback(BaseCallback):
         self.log_path = log_path
         self.flush_every = max(1, flush_every)
         self._buffer: list[dict[str, Any]] = []
+        self._running_totals = defaultdict(
+            lambda: {
+                "base": 0.0,
+                "shaped": 0.0,
+                "auto_start_presses": None,
+                "stagnation_frames": None,
+            }
+        )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return 0.0
+            value = value[0]
+        if hasattr(value, "item"):
+            return float(value.item())
+        return float(value)
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos")
         if not infos:
             return True
 
-        for info in infos:
-            if not info:
-                continue
+        rewards = self.locals.get("rewards")
+
+        for idx, raw_info in enumerate(infos):
+            info = raw_info or {}
+            totals = self._running_totals[idx]
+
+            if rewards is not None:
+                try:
+                    step_reward = rewards[idx]
+                except Exception:
+                    step_reward = rewards
+                totals["shaped"] += self._coerce_float(step_reward)
+
+            diagnostics = info.get("diagnostics") or {}
+            base_value = diagnostics.get("base_reward")
+            if base_value is not None:
+                totals["base"] += self._coerce_float(base_value)
+
+            if "auto_start_presses" in diagnostics and totals["auto_start_presses"] is None:
+                try:
+                    totals["auto_start_presses"] = int(diagnostics["auto_start_presses"])
+                except (TypeError, ValueError):
+                    totals["auto_start_presses"] = None
+
+            for candidate in (diagnostics.get("stagnation_frames"), info.get("stagnation_frames")):
+                if candidate is None:
+                    continue
+                try:
+                    value_int = int(candidate)
+                except (TypeError, ValueError):
+                    continue
+                previous = totals["stagnation_frames"]
+                totals["stagnation_frames"] = value_int if previous is None else max(previous, value_int)
+
             episode = info.get("episode")
             if episode is None:
                 continue
-            diagnostics = info.get("diagnostics", {})
+
             metrics = info.get("metrics", {})
             record = {
                 "timesteps": int(self.num_timesteps),
                 "episode_reward": float(episode.get("r", 0.0)),
                 "episode_length": int(episode.get("l", 0)),
                 "wall_time": float(episode.get("t", 0.0)),
-                "shaped_reward": float(diagnostics.get("shaped_reward", 0.0)),
-                "base_reward": float(diagnostics.get("base_reward", 0.0)),
+                "shaped_reward": float(totals["shaped"]),
+                "base_reward": float(totals["base"]),
                 "metrics": metrics,
                 "time_limit_truncated": bool(info.get("TimeLimit.truncated", False)),
                 "stagnation_truncated": bool(info.get("stagnation_truncated", False)),
             }
-            if "auto_start_presses" in diagnostics:
-                record["auto_start_presses"] = int(diagnostics["auto_start_presses"])
-            if "stagnation_frames" in diagnostics:
-                record["stagnation_frames"] = int(diagnostics["stagnation_frames"])
+
+            if totals["auto_start_presses"] is not None:
+                record["auto_start_presses"] = int(totals["auto_start_presses"])
+            if totals["stagnation_frames"] is not None:
+                record["stagnation_frames"] = int(totals["stagnation_frames"])
+
             self._buffer.append(record)
+            self._running_totals.pop(idx, None)
 
         if len(self._buffer) >= self.flush_every:
             self._flush()

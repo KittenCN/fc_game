@@ -86,6 +86,11 @@ class NESGymEnv(gym.Env):
         self._stagnation_progress_threshold = max(0, int(stagnation_progress_threshold))
         self._stagnation_counter = 0
         self._last_progress_x: int | None = None
+        self._last_score: int | None = None
+        self._last_player_state: int | None = None
+        self._last_world: int | None = None
+        self._last_stage: int | None = None
+        self._last_area: int | None = None
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
@@ -238,17 +243,31 @@ class NESGymEnv(gym.Env):
             return
         self._stagnation_counter = 0
         self._last_progress_x = self._get_mario_x(metrics, ram)
+        self._last_score = metrics.get("score")
+        self._last_player_state = metrics.get("player_state")
+        self._last_world = metrics.get("world")
+        self._last_stage = metrics.get("stage")
+        self._last_area = metrics.get("area")
 
     def _update_stagnation(
         self, metrics: dict[str, int], ram: np.ndarray
     ) -> tuple[bool, int | None]:
         if self._stagnation_max_frames is None:
             return False, None
+
         current_x = self._get_mario_x(metrics, ram)
         if self._last_progress_x is None:
             self._last_progress_x = current_x
             self._stagnation_counter = 0
+            self._last_score = metrics.get("score")
+            self._last_player_state = metrics.get("player_state")
+            self._last_world = metrics.get("world")
+            self._last_stage = metrics.get("stage")
+            self._last_area = metrics.get("area")
             return False, None
+
+        progressed = False
+
         if current_x > self._last_progress_x:
             delta = current_x - self._last_progress_x
             if delta >= self._stagnation_progress_threshold:
@@ -256,7 +275,53 @@ class NESGymEnv(gym.Env):
             else:
                 self._stagnation_counter = max(0, self._stagnation_counter - self.frame_skip)
             self._last_progress_x = max(self._last_progress_x, current_x)
+            progressed = True
+
+        world = metrics.get("world")
+        stage = metrics.get("stage")
+        area = metrics.get("area")
+
+        if (
+            (world is not None and world != self._last_world)
+            or (stage is not None and stage != self._last_stage)
+            or (area is not None and area != self._last_area)
+        ):
+            self._stagnation_counter = 0
+            self._last_progress_x = current_x
+            progressed = True
+
+        if world is not None:
+            self._last_world = world
+        if stage is not None:
+            self._last_stage = stage
+        if area is not None:
+            self._last_area = area
+
+        relief_frames = 0
+
+        score = metrics.get("score")
+        if score is not None:
+            prev_score = self._last_score
+            delta_score = score - prev_score if prev_score is not None else score
+            if delta_score > 0 and not progressed:
+                relief_frames = max(relief_frames, self.frame_skip * (6 + min(delta_score, 50) // 2))
+            self._last_score = score
+
+        player_state = metrics.get("player_state")
+        if player_state is not None:
+            prev_state = self._last_player_state
+            if prev_state is None or player_state > prev_state:
+                relief_frames = max(relief_frames, self.frame_skip * 45)
+            self._last_player_state = player_state
+
+        if not progressed and relief_frames:
+            self._stagnation_counter = max(0, self._stagnation_counter - relief_frames)
+            if self._stagnation_counter == 0:
+                progressed = True
+
+        if progressed:
             return False, None
+
         self._stagnation_counter += self.frame_skip
         if self._stagnation_counter >= self._stagnation_max_frames:
             triggered_frames = self._stagnation_counter
