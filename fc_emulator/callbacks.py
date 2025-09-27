@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any
 
@@ -240,15 +240,26 @@ class EntropyCoefficientCallback(BaseCallback):
 
 
 class DiagnosticsLoggingCallback(BaseCallback):
-    """Stream environment diagnostics to the SB3 logger at a fixed cadence."""
+    """Stream environment diagnostics (progress, hotspots, stagnation) to SB3 logger."""
 
-    def __init__(self, *, log_interval: int = 5000) -> None:
+    def __init__(
+        self,
+        *,
+        log_interval: int = 5000,
+        recent_window: int = 256,
+        hotspot_bucket_size: int = 32,
+    ) -> None:
         super().__init__()
         self.log_interval = max(1, int(log_interval))
+        self.recent_window = max(1, int(recent_window))
+        self.hotspot_bucket_size = max(1, int(hotspot_bucket_size))
         self._last_logged = 0
-        self._buffer_positions: list[float] = []
-        self._buffer_rewards: list[float] = []
+        self._recent_positions: deque[float] = deque(maxlen=self.recent_window)
+        self._positions_since_log: list[float] = []
+        self._rewards_since_log: list[float] = []
         self._reason_counts: Counter[str] = Counter()
+        self._hotspot_counts: Counter[int] = Counter()
+        self._stagnation_hotspots: Counter[int] = Counter()
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos") or []
@@ -256,12 +267,18 @@ class DiagnosticsLoggingCallback(BaseCallback):
             metrics = info.get("metrics") or {}
             x_pos = metrics.get("mario_x")
             if isinstance(x_pos, (int, float)):
-                self._buffer_positions.append(float(x_pos))
+                position = float(x_pos)
+                self._positions_since_log.append(position)
+                self._recent_positions.append(position)
+                bucket = int(x_pos // self.hotspot_bucket_size) * self.hotspot_bucket_size
+                self._hotspot_counts[bucket] += 1
+                if info.get("stagnation_truncated"):
+                    self._stagnation_hotspots[bucket] += 1
             intrinsic = info.get("intrinsic_reward")
             if intrinsic is None:
                 intrinsic = metrics.get("intrinsic_reward")
             if isinstance(intrinsic, (int, float)):
-                self._buffer_rewards.append(float(intrinsic))
+                self._rewards_since_log.append(float(intrinsic))
             reason = metrics.get("stagnation_reason")
             if isinstance(reason, str) and reason:
                 self._reason_counts[reason] += 1
@@ -271,23 +288,41 @@ class DiagnosticsLoggingCallback(BaseCallback):
 
         logger = getattr(self.model, "logger", None)
         if logger is not None:
-            if self._buffer_positions:
-                mean_x = sum(self._buffer_positions) / len(self._buffer_positions)
+            if self._positions_since_log:
+                mean_x = sum(self._positions_since_log) / len(self._positions_since_log)
                 logger.record("diagnostics/mario_x_mean", mean_x)
-                logger.record("diagnostics/mario_x_max", max(self._buffer_positions))
-            if self._buffer_rewards:
-                mean_intrinsic = sum(self._buffer_rewards) / len(self._buffer_rewards)
+                logger.record("diagnostics/mario_x_max", max(self._positions_since_log))
+            if self._recent_positions:
+                recent_mean = sum(self._recent_positions) / len(self._recent_positions)
+                logger.record("diagnostics/mario_x_recent_mean", recent_mean)
+            if self._rewards_since_log:
+                mean_intrinsic = sum(self._rewards_since_log) / len(self._rewards_since_log)
                 logger.record("diagnostics/intrinsic_mean", mean_intrinsic)
             total_reasons = sum(self._reason_counts.values())
             if total_reasons:
                 for reason, count in self._reason_counts.items():
                     ratio = count / float(total_reasons)
                     logger.record(f"diagnostics/stagnation_{reason}", ratio)
+            if self._hotspot_counts:
+                top_hotspots = self._hotspot_counts.most_common(3)
+                for idx, (bucket, count) in enumerate(top_hotspots, start=1):
+                    logger.record(f"diagnostics/hotspot_{idx}_bucket", float(bucket))
+                    logger.record(f"diagnostics/hotspot_{idx}_ratio", count / max(1.0, len(self._positions_since_log)))
+            if self._stagnation_hotspots:
+                total_stagnations = sum(self._stagnation_hotspots.values())
+                for idx, (bucket, count) in enumerate(self._stagnation_hotspots.most_common(3), start=1):
+                    logger.record(f"diagnostics/stagnation_hotspot_{idx}", float(bucket))
+                    logger.record(
+                        f"diagnostics/stagnation_hotspot_{idx}_ratio",
+                        count / float(total_stagnations),
+                    )
             logger.record("diagnostics/last_log_step", float(self.num_timesteps))
             logger.dump(self.num_timesteps)
 
-        self._buffer_positions.clear()
-        self._buffer_rewards.clear()
+        self._positions_since_log.clear()
+        self._rewards_since_log.clear()
         self._reason_counts.clear()
+        self._hotspot_counts.clear()
+        self._stagnation_hotspots.clear()
         self._last_logged = self.num_timesteps
         return True

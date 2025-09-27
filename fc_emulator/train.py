@@ -77,6 +77,8 @@ class TrainingConfig:
     checkpoint_freq: int = 0
     episode_log_path: Optional[Path] = None
     diagnostics_log_interval: int = 5000
+    diagnostics_recent_window: int = 256
+    diagnostics_bucket_size: int = 32
 
     def to_json_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -215,6 +217,8 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         checkpoint_freq=args.checkpoint_freq,
         episode_log_path=episode_log_path,
         diagnostics_log_interval=max(1, args.diagnostics_log_interval),
+        diagnostics_recent_window=max(1, args.diagnostics_recent_window),
+        diagnostics_bucket_size=max(1, args.diagnostics_bucket_size),
     )
 
 
@@ -378,6 +382,18 @@ def main() -> None:
         default=5_000,
         help="Timesteps between diagnostic logging flushes (default: 5000).",
     )
+    parser.add_argument(
+        "--diagnostics-recent-window",
+        type=int,
+        default=256,
+        help="Rolling window size for recent mario_x mean diagnostics (default: 256).",
+    )
+    parser.add_argument(
+        "--diagnostics-bucket-size",
+        type=int,
+        default=32,
+        help="Bucket size (in mario_x) when aggregating hotspot diagnostics (default: 32).",
+    )
     parser.add_argument("--tensorboard", action="store_true", help="Enable TensorBoard logging")
     parser.add_argument(
         "--episode-log",
@@ -477,7 +493,11 @@ def main() -> None:
         callbacks.append(EpisodeLogCallback(config.episode_log_path))
 
     callbacks.append(
-        DiagnosticsLoggingCallback(log_interval=config.diagnostics_log_interval)
+        DiagnosticsLoggingCallback(
+            log_interval=config.diagnostics_log_interval,
+            recent_window=config.diagnostics_recent_window,
+            hotspot_bucket_size=config.diagnostics_bucket_size,
+        )
     )
 
     config_path = _save_config(config)

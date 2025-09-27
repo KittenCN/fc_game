@@ -57,6 +57,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - `--reward-profile`：`none` / `smb_progress` / `smb_dense`
 - `--icm`：启用内在奖励模块（需像素观测）
 - `--diagnostics-log-interval`：诊断信息写入间隔（默认 5000 步）
+- `--diagnostics-recent-window`：近期平均前进距离的窗口（默认 256 回合）
+- `--diagnostics-bucket-size`：热点 bucket 宽度（单位 mario_x，默认 32）
 
 训练流程会自动：
 1. 在 `runs/run_config.json` 存储完整配置以便复现；
