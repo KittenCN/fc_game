@@ -85,6 +85,10 @@ class ICMNetwork(nn.Module):
         one_hot_actions = F.one_hot(actions, num_classes=self.action_dim).float()
         phi_s = obs_features
         phi_next = next_obs_features
+        if phi_s.dim() > 2:
+            phi_s = torch.flatten(phi_s, 1)
+        if phi_next.dim() > 2:
+            phi_next = torch.flatten(phi_next, 1)
         pred_next = self.forward_model(torch.cat([phi_s, one_hot_actions], dim=1))
         pred_action_logits = self.inverse_model(torch.cat([phi_s, phi_next], dim=1))
         forward_loss = F.mse_loss(pred_next, phi_next.detach(), reduction="none").mean(dim=1)
