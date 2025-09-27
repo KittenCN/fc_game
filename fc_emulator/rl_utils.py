@@ -1,8 +1,9 @@
 """Shared helpers for RL training and inference."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence, Tuple
+from typing import Callable, Sequence
 
 import gymnasium as gym
 
@@ -30,22 +31,30 @@ ALGO_MAP = {
     "a2c": A2C,
 }
 
+@dataclass(frozen=True)
+class SkillSequences:
+    """Categorised macro action sequences derived from the action set."""
+
+    all: tuple[tuple[int, ...], ...]
+    forward: tuple[tuple[int, ...], ...]
+    backward: tuple[tuple[int, ...], ...]
+    neutral: tuple[tuple[int, ...], ...]
+
+
 def _derive_skill_action_indices(action_set: Sequence[Sequence[str]]) -> tuple[int, ...]:
     skill_indices: list[int] = []
     for idx, combo in enumerate(action_set):
         normalized = {btn.upper() for btn in combo}
-        # An empty combo is not a skill
         if not normalized:
             continue
-        # Any jump is a skill
         if "A" in normalized:
             skill_indices.append(idx)
-        # Running is a skill, especially when combined with other buttons
         elif "B" in normalized and "RIGHT" in normalized:
             skill_indices.append(idx)
     return tuple(skill_indices)
 
-def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> tuple[tuple[int, ...], ...]:
+
+def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequences:
     normalized = [tuple(btn.upper() for btn in combo) for combo in action_set]
     index_lookup = {frozenset(combo): idx for idx, combo in enumerate(normalized)}
 
@@ -58,50 +67,118 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> tuple[tuple[
                 return value
         return None
 
-    def ensure_sequence(indices: tuple[int | None, ...], store: list[tuple[int, ...]]):
+    sequences: list[tuple[int, ...]] = []
+    forward_sequences: list[tuple[int, ...]] = []
+    backward_sequences: list[tuple[int, ...]] = []
+    neutral_sequences: list[tuple[int, ...]] = []
+
+    def ensure_sequence(
+        indices: tuple[int | None, ...],
+        *,
+        direction: str | None,
+    ) -> None:
         if any(idx is None for idx in indices):
             return
         typed = tuple(int(idx) for idx in indices)
-        if typed and typed not in store:
-            store.append(typed)
-
-    sequences: list[tuple[int, ...]] = []
+        if not typed or typed in sequences:
+            return
+        sequences.append(typed)
+        if direction == "forward":
+            forward_sequences.append(typed)
+        elif direction == "backward":
+            backward_sequences.append(typed)
+        else:
+            neutral_sequences.append(typed)
 
     def combo(*buttons: str) -> tuple[str, ...]:
         return tuple(btn.upper() for btn in buttons if btn)
 
     run_right = first_valid(find_index(combo("B", "RIGHT")), find_index(combo("RIGHT")))
-    run_jump_right = first_valid(find_index(combo("A", "B", "RIGHT")), find_index(combo("A", "RIGHT")))
+    run_jump_right = first_valid(
+        find_index(combo("A", "B", "RIGHT")),
+        find_index(combo("A", "RIGHT")),
+    )
     short_jump_right = find_index(combo("A", "RIGHT"))
-    ensure_sequence((run_right, run_right, run_jump_right, run_jump_right), sequences)
-    ensure_sequence((run_right, short_jump_right, short_jump_right), sequences)
+    ensure_sequence((run_right, run_right, run_jump_right, run_jump_right), direction="forward")
+    ensure_sequence((run_right, short_jump_right, short_jump_right), direction="forward")
     if run_right is not None and run_jump_right is not None:
-        ensure_sequence(tuple([run_right] * 3 + [run_jump_right] * 3), sequences)
-        ensure_sequence(tuple([run_right] * 5 + [run_jump_right] * 5), sequences)
+        ensure_sequence(
+            tuple([run_right] * 3 + [run_jump_right] * 3),
+            direction="forward",
+        )
+        ensure_sequence(
+            tuple([run_right] * 5 + [run_jump_right] * 5),
+            direction="forward",
+        )
+        ensure_sequence(
+            tuple([run_right] * 8 + [run_jump_right] * 6),
+            direction="forward",
+        )
+        ensure_sequence(
+            tuple([run_right] * 10 + [run_jump_right] * 8),
+            direction="forward",
+        )
     if run_right is not None and short_jump_right is not None:
-        ensure_sequence(tuple([run_right] * 2 + [short_jump_right] * 3), sequences)
+        ensure_sequence(
+            tuple([run_right] * 2 + [short_jump_right] * 3),
+            direction="forward",
+        )
+        ensure_sequence(
+            tuple([run_right] * 4 + [short_jump_right] * 4),
+            direction="forward",
+        )
 
     run_left = first_valid(find_index(combo("B", "LEFT")), find_index(combo("LEFT")))
-    run_jump_left = first_valid(find_index(combo("A", "B", "LEFT")), find_index(combo("A", "LEFT")))
+    run_jump_left = first_valid(
+        find_index(combo("A", "B", "LEFT")),
+        find_index(combo("A", "LEFT")),
+    )
     short_jump_left = find_index(combo("A", "LEFT"))
-    ensure_sequence((run_left, run_left, run_jump_left, run_jump_left), sequences)
-    ensure_sequence((run_left, short_jump_left, short_jump_left), sequences)
+    ensure_sequence((run_left, run_left, run_jump_left, run_jump_left), direction="backward")
+    ensure_sequence((run_left, short_jump_left, short_jump_left), direction="backward")
     if run_left is not None and run_jump_left is not None:
-        ensure_sequence(tuple([run_left] * 3 + [run_jump_left] * 3), sequences)
-        ensure_sequence(tuple([run_left] * 5 + [run_jump_left] * 5), sequences)
+        ensure_sequence(
+            tuple([run_left] * 3 + [run_jump_left] * 3),
+            direction="backward",
+        )
+        ensure_sequence(
+            tuple([run_left] * 5 + [run_jump_left] * 5),
+            direction="backward",
+        )
+        ensure_sequence(
+            tuple([run_left] * 8 + [run_jump_left] * 6),
+            direction="backward",
+        )
+        ensure_sequence(
+            tuple([run_left] * 10 + [run_jump_left] * 8),
+            direction="backward",
+        )
     if run_left is not None and short_jump_left is not None:
-        ensure_sequence(tuple([run_left] * 2 + [short_jump_left] * 3), sequences)
+        ensure_sequence(
+            tuple([run_left] * 2 + [short_jump_left] * 3),
+            direction="backward",
+        )
+        ensure_sequence(
+            tuple([run_left] * 4 + [short_jump_left] * 4),
+            direction="backward",
+        )
 
     neutral_jump = first_valid(find_index(combo("A")), short_jump_right, short_jump_left)
     if neutral_jump is not None:
-        ensure_sequence((neutral_jump, neutral_jump), sequences)
+        ensure_sequence((neutral_jump, neutral_jump), direction=None)
+        ensure_sequence((neutral_jump, neutral_jump, neutral_jump), direction=None)
 
     down = first_valid(find_index(combo("DOWN")), find_index(combo("RIGHT", "DOWN")))
     if down is not None:
-        ensure_sequence((down, down, down, down), sequences)
-        ensure_sequence(tuple([down] * 8), sequences)
+        ensure_sequence((down, down, down, down), direction=None)
+        ensure_sequence(tuple([down] * 8), direction=None)
 
-    return tuple(sequences)
+    return SkillSequences(
+        all=tuple(sequences),
+        forward=tuple(forward_sequences),
+        backward=tuple(backward_sequences),
+        neutral=tuple(neutral_sequences),
+    )
 
 
 
@@ -153,7 +230,10 @@ def build_env(
             env,
             exploration_epsilon,
             skill_actions=skill_actions,
-            skill_sequences=skill_sequences,
+            skill_sequences=skill_sequences.all,
+            forward_sequences=skill_sequences.forward,
+            backward_sequences=skill_sequences.backward,
+            neutral_sequences=skill_sequences.neutral,
             stagnation_threshold=stagnation_threshold,
             stagnation_boost=0.5,
         )

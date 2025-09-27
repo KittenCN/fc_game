@@ -65,6 +65,7 @@ python -m fc_emulator.cli --rom path/to/game.nes
   - `rl_env.py`: Gymnasium 环境包装器。
   - `wrappers.py`: 强化学习动作集合与离散化封装。
   - `rl_utils.py`: 训练/推理共用的环境构建工具。
+  - `analysis.py`: 训练日志 (`episode_log.jsonl`) 的统计分析 CLI。
   - `train.py`: 训练 CLI（PPO/A2C）。
   - `infer.py`: 推理 CLI。
   - `cli.py`: 命令行入口，支持人类游玩。
@@ -80,6 +81,10 @@ python -m fc_emulator.cli --rom path/to/game.nes
   * 停滞触发后强制提升 epsilon，最长三倍阈值时直接将随机概率拉满。
   * 奖励函数加入停滞突破奖励、微小前进激励，以及动力状态提升加分。
 - 当前效果：较长宏动作能偶尔跨越 900+，但总体分布仍偏向 300-700 区间，需要进一步跟进。
+
+## 最新优化
+- `EpsilonRandomActionWrapper` 根据 `mario_x` 停滞热点动态调整优先宏动作，更早触发长距离助跑+跳跃组合，并在突破后进行冷却，减轻第一根管道处的卡顿。
+- 新增 `python -m fc_emulator.analysis <episode_log.jsonl>` 命令，可快速统计均值/中位数、停滞帧数以及热点区间，便于在训练期间追踪策略瓶颈。
 
 ## 未来设想与开发计划
 - 训练监控：增加对 `stagnation_frames`、宏动作触发次数的 TensorBoard 统计，便于定位策略退化。
