@@ -86,6 +86,9 @@ class NESGymEnv(gym.Env):
         self._stagnation_progress_threshold = max(0, int(stagnation_progress_threshold))
         self._stagnation_counter = 0
         self._last_progress_x: int | None = None
+        self._max_progress_x: int = 0
+        self._stagnation_last_limit: int | None = None
+        self._stagnation_bonus_scale = 0.25
         self._last_score: int | None = None
         self._last_player_state: int | None = None
         self._last_world: int | None = None
@@ -164,6 +167,10 @@ class NESGymEnv(gym.Env):
                 merged_info["stagnation_truncated"] = True
         if stagnation_frames is not None:
             merged_info["stagnation_frames"] = stagnation_frames
+        current_limit = self._stagnation_last_limit or self._current_stagnation_limit()
+        if current_limit is not None:
+            merged_info.setdefault("diagnostics", {})["stagnation_limit"] = int(current_limit)
+
 
         if self.reward_config:
             context = RewardContext(
@@ -245,6 +252,8 @@ class NESGymEnv(gym.Env):
             self._last_world = None
             self._last_stage = None
             self._last_area = None
+            self._max_progress_x = 0
+            self._stagnation_last_limit = None
             return
         self._stagnation_counter = 0
         self._last_progress_x = self._get_mario_x(metrics, ram)
@@ -253,6 +262,18 @@ class NESGymEnv(gym.Env):
         self._last_world = metrics.get("world")
         self._last_stage = metrics.get("stage")
         self._last_area = metrics.get("area")
+        self._max_progress_x = self._last_progress_x or 0
+        self._stagnation_last_limit = self._current_stagnation_limit()
+
+    def _current_stagnation_limit(self) -> int | None:
+        if self._stagnation_max_frames is None:
+            return None
+        base = int(self._stagnation_max_frames)
+        if self._max_progress_x <= 0:
+            return base
+        bonus = int(self._max_progress_x * self._stagnation_bonus_scale)
+        bonus = min(base, max(0, bonus))
+        return base + bonus
 
     def _update_stagnation(
         self, metrics: dict[str, int], ram: np.ndarray
@@ -264,11 +285,13 @@ class NESGymEnv(gym.Env):
         if self._last_progress_x is None:
             self._last_progress_x = current_x
             self._stagnation_counter = 0
+            self._max_progress_x = current_x
             self._last_score = metrics.get("score")
             self._last_player_state = metrics.get("player_state")
             self._last_world = metrics.get("world")
             self._last_stage = metrics.get("stage")
             self._last_area = metrics.get("area")
+            self._stagnation_last_limit = self._current_stagnation_limit()
             return False, None
 
         progressed = False
@@ -280,6 +303,7 @@ class NESGymEnv(gym.Env):
             else:
                 self._stagnation_counter = max(0, self._stagnation_counter - self.frame_skip)
             self._last_progress_x = max(self._last_progress_x, current_x)
+            self._max_progress_x = max(self._max_progress_x, current_x)
             progressed = True
 
         world = metrics.get("world")
@@ -293,6 +317,7 @@ class NESGymEnv(gym.Env):
         ):
             self._stagnation_counter = 0
             self._last_progress_x = current_x
+            self._max_progress_x = max(self._max_progress_x, current_x)
             progressed = True
 
         if world is not None:
@@ -324,16 +349,21 @@ class NESGymEnv(gym.Env):
             if self._stagnation_counter == 0:
                 progressed = True
 
+        limit = self._current_stagnation_limit()
+        self._stagnation_last_limit = limit
+
         if progressed:
             return False, None
 
         self._stagnation_counter += self.frame_skip
-        if self._stagnation_counter >= self._stagnation_max_frames:
+        threshold = limit if limit is not None else self._stagnation_max_frames
+        if threshold is not None and self._stagnation_counter >= threshold:
             triggered_frames = self._stagnation_counter
             self._stagnation_counter = 0
             self._last_progress_x = current_x
             return True, triggered_frames
         return False, None
+
 
     @staticmethod
     def _get_mario_x(metrics: dict[str, int], ram: np.ndarray) -> int:

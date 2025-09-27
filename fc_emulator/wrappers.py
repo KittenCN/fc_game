@@ -228,6 +228,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         hotspot_window: int = 18,
         hotspot_bucket: int = 32,
         sequence_escalation_bias: float = 0.85,
+        hotspot_sequence_bias: float = 0.9,
     ) -> None:
         super().__init__(env)
         if not isinstance(env.action_space, gym.spaces.Discrete):
@@ -256,6 +257,9 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._hotspot_bucket = max(4, int(hotspot_bucket))
         self._sequence_escalation_bias = float(
             min(max(sequence_escalation_bias, 0.0), 1.0)
+        )
+        self._hotspot_sequence_bias = float(
+            min(max(hotspot_sequence_bias, 0.0), 1.0)
         )
         self._hotspot_history: deque[int] = deque()
         self._hotspot_counts: dict[int, int] = {}
@@ -366,24 +370,28 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
 
         stagnation = self._current_stagnation()
         prioritized = self._get_priority_sequences()
-        if (
-            prioritized
-            and stagnation >= max(1, self._stagnation_threshold // 2)
-            and self._macro_cooldown == 0
-            and self.np_random.random() < self._sequence_escalation_bias
-        ):
-            sequence = self._select_sequence(prioritized)
-            if sequence:
-                return self._queue_macro(sequence)
+        if prioritized and self._macro_cooldown == 0:
+            threshold = max(1, self._stagnation_threshold // 3)
+            if stagnation >= threshold:
+                bias = self._sequence_escalation_bias
+                if self._active_hotspot is not None:
+                    ratio = min(1.0, stagnation / float(max(1, self._stagnation_threshold)))
+                    bias = max(bias, self._hotspot_sequence_bias * ratio)
+                if self.np_random.random() < bias:
+                    sequence = self._select_sequence(prioritized)
+                    if sequence:
+                        return self._queue_macro(sequence)
 
         if (
             self._skill_sequences
             and stagnation >= self._stagnation_threshold
             and self._macro_cooldown == 0
         ):
-            sequence_bias = 1.0 if stagnation >= self._stagnation_threshold * 2 else min(
-                1.0, self._skill_bias + 0.15
-            )
+            sequence_bias = min(1.0, self._skill_bias + 0.15)
+            if stagnation >= self._stagnation_threshold * 2:
+                sequence_bias = 1.0
+            if self._active_hotspot is not None:
+                sequence_bias = max(sequence_bias, self._hotspot_sequence_bias)
             if self.np_random.random() < sequence_bias:
                 sequence = self._select_sequence(self._skill_sequences)
                 if sequence:

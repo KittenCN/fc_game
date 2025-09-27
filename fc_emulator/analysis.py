@@ -24,8 +24,11 @@ class EpisodeAggregate:
     stagnation_episodes: int
     stagnation_frames_mean: float | None
     hotspots: tuple[tuple[int, int], ...]
+    negative_reward_ratio: float
+    mean_intrinsic_reward: float | None
+    termination_counts: tuple[tuple[str, int], ...]
 
-    def as_dict(self) -> dict[str, float | int | list[tuple[int, int]] | None]:
+    def as_dict(self) -> dict[str, float | int | list[tuple[int, int]] | None | list[tuple[str, int]]]:
         return {
             "episodes": self.episodes,
             "mean_mario_x": self.mean_mario_x,
@@ -36,6 +39,9 @@ class EpisodeAggregate:
             "stagnation_episodes": self.stagnation_episodes,
             "stagnation_frames_mean": self.stagnation_frames_mean,
             "hotspots": list(self.hotspots),
+            "negative_reward_ratio": self.negative_reward_ratio,
+            "mean_intrinsic_reward": self.mean_intrinsic_reward,
+            "termination_counts": list(self.termination_counts),
         }
 
 
@@ -69,6 +75,9 @@ def summarise_episode_log(
     stagnation_count = 0
     hotspots = Counter()
 
+    intrinsic_values: list[float] = []
+    negative_count = 0
+    termination_counter = Counter()
     for record in _iter_records(path):
         metrics = record.get("metrics") or {}
         x_pos = metrics.get("mario_x")
@@ -78,13 +87,30 @@ def summarise_episode_log(
             hotspots[bucket] += 1
 
         episode_lengths.append(int(record.get("episode_length", 0)))
-        episode_rewards.append(float(record.get("episode_reward", 0.0)))
+        reward_value = float(record.get("episode_reward", 0.0))
+        episode_rewards.append(reward_value)
+        if reward_value < 0.0:
+            negative_count += 1
 
         if record.get("stagnation_truncated"):
             stagnation_count += 1
             frames = record.get("stagnation_frames")
             if isinstance(frames, (int, float)):
                 stagnation_frames.append(int(frames))
+
+        intrinsic = record.get("intrinsic_reward")
+        if isinstance(intrinsic, (int, float)):
+            intrinsic_values.append(float(intrinsic))
+
+        termination = record.get("termination_reason")
+        if not isinstance(termination, str) or not termination:
+            if record.get("stagnation_truncated"):
+                termination = "stagnation"
+            elif record.get("time_limit_truncated"):
+                termination = "time_limit"
+            else:
+                termination = "unknown"
+        termination_counter[termination] += 1
 
     if not mario_positions:
         raise ValueError(f"No episode records found in {path}")
@@ -99,6 +125,10 @@ def summarise_episode_log(
     frames_mean = mean(stagnation_frames) if stagnation_frames else None
     top_hotspots = tuple(hotspots.most_common(top_n))
 
+    negative_ratio = negative_count / len(mario_positions) if mario_positions else 0.0
+    intrinsic_mean = mean(intrinsic_values) if intrinsic_values else None
+    termination_stats = tuple(termination_counter.most_common())
+
     return EpisodeAggregate(
         episodes=len(mario_positions),
         mean_mario_x=mean(mario_positions),
@@ -109,6 +139,9 @@ def summarise_episode_log(
         stagnation_episodes=stagnation_count,
         stagnation_frames_mean=frames_mean,
         hotspots=top_hotspots,
+        negative_reward_ratio=negative_ratio,
+        mean_intrinsic_reward=intrinsic_mean,
+        termination_counts=termination_stats,
     )
 
 
@@ -144,10 +177,17 @@ def main() -> None:
     print(f"Max mario_x         : {data['max_mario_x']}")
     print(f"Mean episode length : {data['mean_episode_length']:.2f}")
     print(f"Mean episode reward : {data['mean_episode_reward']:.2f}")
+    print(f"Negative reward ratio: {data['negative_reward_ratio'] * 100:.1f}%")
+    intrinsic_mean = data['mean_intrinsic_reward']
+    if intrinsic_mean is not None:
+        print(f"Mean intrinsic reward : {intrinsic_mean:.2f}")
     print(f"Stagnation episodes : {data['stagnation_episodes']}")
     frames_mean = data['stagnation_frames_mean']
     if frames_mean is not None:
         print(f"Mean stagnation frames: {frames_mean:.2f}")
+    print("Terminations by reason:")
+    for reason, count in summary.termination_counts:
+        print(f"  {reason:>10}: {count}")
     print("Hotspots (bucket start -> count):")
     for bucket, count in summary.hotspots:
         print("  ", _format_hotspot(bucket, count, args.bucket_size))

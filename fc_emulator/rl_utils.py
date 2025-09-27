@@ -114,8 +114,13 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
     if run_right is not None and run_jump_right is not None:
         ensure_sequence(tuple([run_right] * 3 + [run_jump_right] * 3), direction="forward")
         ensure_sequence(tuple([run_right] * 5 + [run_jump_right] * 5), direction="forward")
+        ensure_sequence(tuple([run_right] * 6 + [run_jump_right] * 6), direction="forward")
+        ensure_sequence(tuple([run_right] * 4 + [run_jump_right] * 8), direction="forward")
+    if run_right is not None:
+        ensure_sequence(tuple([run_right] * 8), direction="forward")
     if run_right is not None and short_jump_right is not None:
         ensure_sequence(tuple([run_right] * 2 + [short_jump_right] * 3), direction="forward")
+        ensure_sequence(tuple([run_right] * 3 + [short_jump_right] * 4 + [run_right] * 2), direction="forward")
 
     run_left = first_valid(find_index(combo("B", "LEFT")), find_index(combo("LEFT")))
     run_jump_left = first_valid(
@@ -128,8 +133,13 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
     if run_left is not None and run_jump_left is not None:
         ensure_sequence(tuple([run_left] * 3 + [run_jump_left] * 3), direction="backward")
         ensure_sequence(tuple([run_left] * 5 + [run_jump_left] * 5), direction="backward")
+        ensure_sequence(tuple([run_left] * 6 + [run_jump_left] * 6), direction="backward")
+        ensure_sequence(tuple([run_left] * 4 + [run_jump_left] * 8), direction="backward")
+    if run_left is not None:
+        ensure_sequence(tuple([run_left] * 8), direction="backward")
     if run_left is not None and short_jump_left is not None:
         ensure_sequence(tuple([run_left] * 2 + [short_jump_left] * 3), direction="backward")
+        ensure_sequence(tuple([run_left] * 3 + [short_jump_left] * 4 + [run_left] * 2), direction="backward")
 
     neutral_jump = first_valid(find_index(combo("A")), short_jump_right, short_jump_left)
     if neutral_jump is not None:
@@ -185,8 +195,8 @@ def build_env(
         skill_sequences = _derive_skill_sequences(action_set)
         stagnation_threshold = 120
         if stagnation_max_frames:
-            candidate = max(60, int(stagnation_max_frames) // 4)
-            stagnation_threshold = max(60, min(candidate, int(stagnation_max_frames)))
+            candidate = max(45, int(stagnation_max_frames) // 5)
+            stagnation_threshold = max(45, min(candidate, int(stagnation_max_frames)))
         env = EpsilonRandomActionWrapper(
             env,
             exploration_epsilon,

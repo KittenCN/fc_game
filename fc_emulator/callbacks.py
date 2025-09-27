@@ -28,6 +28,8 @@ class EpisodeLogCallback(BaseCallback):
                 "shaped": 0.0,
                 "auto_start_presses": None,
                 "stagnation_frames": None,
+                "stagnation_limit": None,
+                "intrinsic": 0.0,
             }
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,6 +67,12 @@ class EpisodeLogCallback(BaseCallback):
             if base_value is not None:
                 totals["base"] += self._coerce_float(base_value)
 
+            intrinsic_value = diagnostics.get("intrinsic_reward")
+            if intrinsic_value is None:
+                intrinsic_value = info.get("intrinsic_reward")
+            if intrinsic_value is not None:
+                totals["intrinsic"] += self._coerce_float(intrinsic_value)
+
             if "auto_start_presses" in diagnostics and totals["auto_start_presses"] is None:
                 try:
                     totals["auto_start_presses"] = int(diagnostics["auto_start_presses"])
@@ -81,9 +89,24 @@ class EpisodeLogCallback(BaseCallback):
                 previous = totals["stagnation_frames"]
                 totals["stagnation_frames"] = value_int if previous is None else max(previous, value_int)
 
+            limit_value = diagnostics.get("stagnation_limit")
+            if limit_value is None:
+                limit_value = info.get("stagnation_limit")
+            if limit_value is not None:
+                try:
+                    totals["stagnation_limit"] = float(limit_value)
+                except (TypeError, ValueError):
+                    pass
+
             episode = info.get("episode")
             if episode is None:
                 continue
+
+            termination_reason = "terminated"
+            if info.get("stagnation_truncated"):
+                termination_reason = "stagnation"
+            elif info.get("TimeLimit.truncated", False):
+                termination_reason = "time_limit"
 
             metrics = info.get("metrics", {})
             record = {
@@ -96,12 +119,18 @@ class EpisodeLogCallback(BaseCallback):
                 "metrics": metrics,
                 "time_limit_truncated": bool(info.get("TimeLimit.truncated", False)),
                 "stagnation_truncated": bool(info.get("stagnation_truncated", False)),
+                "termination_reason": termination_reason,
             }
 
             if totals["auto_start_presses"] is not None:
                 record["auto_start_presses"] = int(totals["auto_start_presses"])
             if totals["stagnation_frames"] is not None:
                 record["stagnation_frames"] = int(totals["stagnation_frames"])
+            if totals["stagnation_limit"] is not None:
+                record["stagnation_limit"] = float(totals["stagnation_limit"])
+
+            if abs(totals["intrinsic"]) > 1e-9:
+                record["intrinsic_reward"] = float(totals["intrinsic"])
 
             self._buffer.append(record)
             self._running_totals.pop(idx, None)
