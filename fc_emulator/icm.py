@@ -12,6 +12,12 @@ import torch.nn.functional as F
 from stable_baselines3.common.vec_env import VecEnvWrapper
 
 
+def _compute_flatten_size(module: nn.Module, channels: int, height: int, width: int) -> int:
+    with torch.no_grad():
+        sample = torch.zeros(1, channels, height, width)
+        return module(sample).view(1, -1).shape[1]
+
+
 @dataclass
 class ICMConfig:
     feature_dim: int = 256
@@ -26,7 +32,7 @@ class ICMConfig:
 class _ICMEncoder(nn.Module):
     """Convolutional encoder that maps images to latent features."""
 
-    def __init__(self, input_channels: int, feature_dim: int) -> None:
+    def __init__(self, input_channels: int, feature_dim: int, height: int, width: int) -> None:
         super().__init__()
         self.cnn = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
@@ -38,9 +44,7 @@ class _ICMEncoder(nn.Module):
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
         )
-        with torch.no_grad():
-            sample = torch.zeros(1, input_channels, 84, 84)
-            n_flatten = self.cnn(sample).view(1, -1).shape[1]
+        n_flatten = _compute_flatten_size(self.cnn, input_channels, height, width)
         self.head = nn.Sequential(
             nn.Linear(n_flatten, feature_dim),
             nn.ReLU(inplace=True),
@@ -55,9 +59,9 @@ class _ICMEncoder(nn.Module):
 class ICMNetwork(nn.Module):
     """Full ICM network containing encoder, inverse and forward models."""
 
-    def __init__(self, input_channels: int, action_dim: int, config: ICMConfig) -> None:
+    def __init__(self, input_channels: int, action_dim: int, height: int, width: int, config: ICMConfig) -> None:
         super().__init__()
-        self.encoder = _ICMEncoder(input_channels, config.feature_dim)
+        self.encoder = _ICMEncoder(input_channels, config.feature_dim, height, width)
         self.inverse_model = nn.Sequential(
             nn.Linear(config.feature_dim * 2, config.hidden_dim),
             nn.ReLU(inplace=True),
@@ -114,8 +118,6 @@ class ICMVecEnvWrapper(VecEnvWrapper):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self._last_obs: Any = None
         self._last_actions: np.ndarray | None = None
-        self._height = height
-        self._width = width
 
     def reset(self):
         obs = self.venv.reset()
