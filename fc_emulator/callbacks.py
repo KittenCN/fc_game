@@ -29,6 +29,7 @@ class EpisodeLogCallback(BaseCallback):
                 "auto_start_presses": None,
                 "stagnation_frames": None,
                 "stagnation_limit": None,
+                "stagnation_idle_frames": None,
                 "intrinsic": 0.0,
             }
         )
@@ -98,6 +99,20 @@ class EpisodeLogCallback(BaseCallback):
                 except (TypeError, ValueError):
                     pass
 
+            idle_candidate = diagnostics.get("stagnation_idle_frames")
+            if idle_candidate is None:
+                idle_candidate = info.get("stagnation_idle_frames")
+            if idle_candidate is not None:
+                try:
+                    idle_int = int(idle_candidate)
+                except (TypeError, ValueError):
+                    idle_int = None
+                if idle_int is not None:
+                    previous_idle = totals["stagnation_idle_frames"]
+                    totals["stagnation_idle_frames"] = (
+                        idle_int if previous_idle is None else max(previous_idle, idle_int)
+                    )
+
             episode = info.get("episode")
             if episode is None:
                 continue
@@ -126,6 +141,8 @@ class EpisodeLogCallback(BaseCallback):
                 record["auto_start_presses"] = int(totals["auto_start_presses"])
             if totals["stagnation_frames"] is not None:
                 record["stagnation_frames"] = int(totals["stagnation_frames"])
+            if totals["stagnation_idle_frames"] is not None:
+                record["stagnation_idle_frames"] = int(totals["stagnation_idle_frames"])
             if totals["stagnation_limit"] is not None:
                 record["stagnation_limit"] = float(totals["stagnation_limit"])
 

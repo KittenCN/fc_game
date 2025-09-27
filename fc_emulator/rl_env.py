@@ -171,6 +171,9 @@ class NESGymEnv(gym.Env):
         if status.bucket is not None:
             diagnostics["stagnation_bucket"] = int(status.bucket)
             metrics_entry["stagnation_bucket"] = int(status.bucket)
+        if status.idle_counter is not None:
+            diagnostics["stagnation_idle_frames"] = int(status.idle_counter)
+            metrics_entry["stagnation_idle_frames"] = int(status.idle_counter)
         if status.frames is not None:
             merged_info["stagnation_frames"] = status.frames
             diagnostics["stagnation_frames"] = status.frames
