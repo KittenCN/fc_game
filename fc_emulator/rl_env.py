@@ -155,12 +155,22 @@ class NESGymEnv(gym.Env):
 
         status = self._stagnation_monitor.update(metrics, ram_snapshot, frame_skip=self.frame_skip)
         diagnostics = merged_info.setdefault("diagnostics", {})
+        metrics_entry = merged_info.setdefault("metrics", {})
         diagnostics["stagnation_counter"] = int(self._stagnation_monitor.counter)
         if status.limit is not None:
             diagnostics["stagnation_limit"] = int(status.limit)
         if status.reason:
             diagnostics["stagnation_reason"] = status.reason
-            merged_info.setdefault("metrics", {})["stagnation_reason"] = status.reason
+            metrics_entry["stagnation_reason"] = status.reason
+        if status.event:
+            diagnostics["stagnation_event"] = status.event
+            metrics_entry["stagnation_event"] = status.event
+        if status.position is not None:
+            diagnostics["stagnation_position"] = int(status.position)
+            metrics_entry["stagnation_position"] = int(status.position)
+        if status.bucket is not None:
+            diagnostics["stagnation_bucket"] = int(status.bucket)
+            metrics_entry["stagnation_bucket"] = int(status.bucket)
         if status.frames is not None:
             merged_info["stagnation_frames"] = status.frames
             diagnostics["stagnation_frames"] = status.frames

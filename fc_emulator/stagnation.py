@@ -15,6 +15,7 @@ class StagnationConfig:
     micro_relief_ratio: float = 0.5
     score_relief_base: int = 6
     powerup_relief: int = 45
+    hotspot_bucket: int = 32
 
 
 @dataclass
@@ -24,6 +25,9 @@ class StagnationStatus:
     triggered: bool
     frames: int | None
     reason: str | None
+    event: str | None
+    position: int | None
+    bucket: int | None
 
 
 class StagnationMonitor:
@@ -65,6 +69,13 @@ class StagnationMonitor:
         bonus = max(0, min(base, bonus))
         return int(base + bonus)
 
+    def _bucketise(self, position: int | None) -> int | None:
+        if position is None:
+            return None
+        bucket = max(0, int(position))
+        size = max(1, int(self.config.hotspot_bucket))
+        return (bucket // size) * size
+
     def reset(self, metrics: dict[str, Any], ram: np.ndarray) -> None:
         self._counter = 0
         self._max_progress_x = 0
@@ -83,7 +94,16 @@ class StagnationMonitor:
             self._counter = 0
             self._limit = None
             self._last_reason = None
-            return StagnationStatus(counter=0, limit=None, triggered=False, frames=None, reason=None)
+            return StagnationStatus(
+                counter=0,
+                limit=None,
+                triggered=False,
+                frames=None,
+                reason=None,
+                event=None,
+                position=current_x,
+                bucket=self._bucketise(current_x),
+            )
 
         current_x = self._get_mario_x(metrics, ram)
         reason = "no_progress"
@@ -93,7 +113,16 @@ class StagnationMonitor:
             self._last_progress_x = current_x
             self._max_progress_x = max(self._max_progress_x, current_x)
             self._limit = self._compute_limit()
-            return StagnationStatus(self._counter, self._limit, False, None, None)
+            return StagnationStatus(
+                counter=self._counter,
+                limit=self._limit,
+                triggered=False,
+                frames=None,
+                reason=None,
+                event=None,
+                position=current_x,
+                bucket=self._bucketise(current_x),
+            )
 
         delta_x = current_x - self._last_progress_x
         if delta_x > 0:
@@ -162,6 +191,7 @@ class StagnationMonitor:
         self._limit = self._compute_limit()
         triggered = False
         frames = None
+        event = reason
         if self._limit is not None and self._counter >= self._limit:
             triggered = True
             frames = self._counter
@@ -176,6 +206,9 @@ class StagnationMonitor:
             triggered=triggered,
             frames=frames,
             reason=reason,
+            event=event,
+            position=current_x,
+            bucket=self._bucketise(current_x),
         )
 
 

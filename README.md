@@ -74,7 +74,8 @@ python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
 
 ## 日志与分析
 - 训练时 `EpisodeLogCallback` 默认写入 `runs/episode_log.jsonl`，记录基础奖励、塑形奖励、内在奖励与 `metrics.stagnation_reason`。
-- `DiagnosticsLoggingCallback` 会把平均 `mario_x`、内在奖励、停滞原因占比写入 TensorBoard（`diagnostics/*`）。
+- 训练日志现在额外包含 `metrics.stagnation_event`、`metrics.stagnation_bucket` 与 `metrics.stagnation_position`，便于定位触发停滞的具体原因与热点。
+- `DiagnosticsLoggingCallback` 会把平均 `mario_x`、近期均值、热点位置与停滞原因占比写入 TensorBoard（`diagnostics/*`）。
 - 使用分析工具快速汇总：
   ```bash
   python -m fc_emulator.analysis runs/episode_log.jsonl --bucket-size 32 --top 10
