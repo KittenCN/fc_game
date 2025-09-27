@@ -5,7 +5,15 @@ from collections import deque
 from typing import Iterable, Sequence, Tuple
 
 import gymnasium as gym
+from gymnasium import spaces
+
 import numpy as np
+
+try:
+    from stable_baselines3.common.vec_env import VecEnvWrapper
+except ImportError:  # pragma: no cover - optional dependency
+    VecEnvWrapper = None  # type: ignore
+
 
 from .controller import BUTTON_ORDER
 
@@ -115,23 +123,59 @@ class ResizeObservationWrapper(gym.ObservationWrapper):
             raise ValueError("shape must be (height, width)")
         self.shape = shape
         orig_space = env.observation_space
-        if len(orig_space.shape) == 3:
-            channels = orig_space.shape[2]
+        self._dict_mode = isinstance(orig_space, spaces.Dict)
+        if self._dict_mode:
+            if "pixels" not in orig_space.spaces:
+                raise ValueError("ResizeObservationWrapper requires a 'pixels' key in Dict observations")
+            pixel_space = orig_space.spaces["pixels"]
+            if len(pixel_space.shape) == 3:
+                channels = pixel_space.shape[2]
+            else:
+                channels = 1
+            self.channels = channels
+            self._pixel_dtype = pixel_space.dtype
+            spaces_dict = dict(orig_space.spaces)
+            spaces_dict["pixels"] = spaces.Box(
+                low=0,
+                high=255,
+                shape=(shape[0], shape[1], channels),
+                dtype=pixel_space.dtype,
+            )
+            self.observation_space = spaces.Dict(spaces_dict)
         else:
-            channels = 1
-        self.channels = channels
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(shape[0], shape[1], channels),
-            dtype=orig_space.dtype,
-        )
+            if len(orig_space.shape) == 3:
+                channels = orig_space.shape[2]
+            else:
+                channels = 1
+            self.channels = channels
+            self.observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(shape[0], shape[1], channels),
+                dtype=orig_space.dtype,
+            )
+            self._pixel_dtype = orig_space.dtype
 
-    def observation(self, observation: np.ndarray) -> np.ndarray:
+    def observation(self, observation: np.ndarray | dict[str, np.ndarray]):
+        if self._dict_mode:
+            obs_dict = dict(observation)
+            pixels = obs_dict.get("pixels")
+            if pixels is None:
+                return obs_dict
+            resized = _resize_frame(pixels, self.shape)
+            if self.channels == 1 and resized.ndim == 2:
+                resized = resized[..., None]
+            if resized.dtype != self._pixel_dtype:
+                resized = resized.astype(self._pixel_dtype, copy=False)
+            obs_dict["pixels"] = resized
+            return obs_dict
         resized = _resize_frame(observation, self.shape)
         if self.channels == 1 and resized.ndim == 2:
             resized = resized[..., None]
+        if resized.dtype != self._pixel_dtype:
+            resized = resized.astype(self._pixel_dtype, copy=False)
         return resized
+
 
 
 class DiscreteActionWrapper(gym.ActionWrapper):
@@ -392,3 +436,102 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         if bias is not None:
             self._skill_bias = float(min(max(bias, 0.0), 1.0))
 
+
+class VecTransposePixelsDictWrapper(VecEnvWrapper):
+    """Transpose dict observations so that the 'pixels' entry is channel-first."""
+
+    def __init__(self, venv, *, key: str = "pixels"):
+        if VecEnvWrapper is None:  # pragma: no cover - optional dependency
+            raise ImportError("VecTransposePixelsDictWrapper requires stable-baselines3")
+        observation_space = venv.observation_space
+        if not isinstance(observation_space, spaces.Dict) or key not in observation_space.spaces:
+            raise ValueError("VecTransposePixelsDictWrapper expects a Dict observation with a 'pixels' key")
+        pixel_space = observation_space.spaces[key]
+        if len(pixel_space.shape) != 3:
+            raise ValueError("'pixels' entry must be an image with shape (H, W, C)")
+        height, width, channels = pixel_space.shape
+        transposed_space = spaces.Box(
+            low=pixel_space.low.min() if isinstance(pixel_space.low, np.ndarray) else 0,
+            high=pixel_space.high.max() if isinstance(pixel_space.high, np.ndarray) else 255,
+            shape=(channels, height, width),
+            dtype=pixel_space.dtype,
+        )
+        new_spaces = dict(observation_space.spaces)
+        new_spaces[key] = transposed_space
+        super().__init__(venv, observation_space=spaces.Dict(new_spaces))
+        self.key = key
+        self._channels = channels
+        self._height = height
+        self._width = width
+
+    def _transpose(self, pixels: np.ndarray) -> np.ndarray:
+        return np.transpose(pixels, (0, 3, 1, 2))
+
+    def reset(self) -> dict[str, np.ndarray]:
+        obs = self.venv.reset()
+        obs_dict = dict(obs)
+        obs_dict[self.key] = self._transpose(obs_dict[self.key])
+        return obs_dict
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        obs_dict = dict(obs)
+        obs_dict[self.key] = self._transpose(obs_dict[self.key])
+        return obs_dict, rewards, dones, infos
+
+
+class VecFrameStackPixelsDictWrapper(VecEnvWrapper):
+    """Frame-stack only the 'pixels' entry inside Dict observations."""
+
+    def __init__(self, venv, *, key: str = "pixels", n_stack: int = 4):
+        if VecEnvWrapper is None:  # pragma: no cover - optional dependency
+            raise ImportError("VecFrameStackPixelsDictWrapper requires stable-baselines3")
+        if n_stack <= 0:
+            raise ValueError("n_stack must be >= 1")
+        observation_space = venv.observation_space
+        if not isinstance(observation_space, spaces.Dict) or key not in observation_space.spaces:
+            raise ValueError("VecFrameStackPixelsDictWrapper expects a Dict observation with a 'pixels' key")
+        pixel_space = observation_space.spaces[key]
+        if len(pixel_space.shape) != 3:
+            raise ValueError("'pixels' entry must be channel-first (C, H, W)")
+        channels, height, width = pixel_space.shape
+        stacked_space = spaces.Box(
+            low=pixel_space.low.min() if isinstance(pixel_space.low, np.ndarray) else pixel_space.low,
+            high=pixel_space.high.max() if isinstance(pixel_space.high, np.ndarray) else pixel_space.high,
+            shape=(channels * n_stack, height, width),
+            dtype=pixel_space.dtype,
+        )
+        new_spaces = dict(observation_space.spaces)
+        new_spaces[key] = stacked_space
+        super().__init__(venv, observation_space=spaces.Dict(new_spaces))
+        self.key = key
+        self.n_stack = int(n_stack)
+        self.channels = channels
+        self._dtype = pixel_space.dtype
+        self._height = height
+        self._width = width
+        self.stacked_obs = np.zeros((self.num_envs, channels * n_stack, height, width), dtype=self._dtype)
+
+    def _append(self, pixels: np.ndarray) -> None:
+        self.stacked_obs[:, :-self.channels] = self.stacked_obs[:, self.channels:]
+        self.stacked_obs[:, -self.channels:] = pixels
+
+    def reset(self):
+        obs = self.venv.reset()
+        obs_dict = dict(obs)
+        self.stacked_obs.fill(0)
+        self._append(obs_dict[self.key])
+        obs_dict[self.key] = self.stacked_obs.copy()
+        return obs_dict
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        obs_dict = dict(obs)
+        pixels = obs_dict[self.key]
+        self._append(pixels)
+        for idx, done in enumerate(dones):
+            if done:
+                self.stacked_obs[idx].fill(0)
+                self.stacked_obs[idx, -self.channels:] = pixels[idx]
+        obs_dict[self.key] = self.stacked_obs.copy()
+        return obs_dict, rewards, dones, infos

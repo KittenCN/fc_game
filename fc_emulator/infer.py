@@ -3,13 +3,6 @@ from __future__ import annotations
 
 import argparse
 
-try:  # pragma: no cover - optional dependency
-    from stable_baselines3.common.vec_env import VecFrameStack, VecTransposeImage
-except ImportError as exc:  # pragma: no cover - user guidance
-    raise SystemExit(
-        "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
-    ) from exc
-
 from .rl_utils import (
     ALGO_MAP,
     make_vector_env,
@@ -26,7 +19,7 @@ def main() -> None:
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--max-episode-steps", type=int, default=5_000)
-    parser.add_argument("--observation-type", choices=["rgb", "gray"], default="gray")
+    parser.add_argument("--observation-type", choices=["rgb", "gray", "rgb_ram", "gray_ram", "ram"], default="gray")
     parser.add_argument("--action-set", help="Preset name (default/simple) or custom combos")
     parser.add_argument("--resize", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), help="Downscale observations (must match training)")
     parser.add_argument("--disable-auto-start", action="store_true", help="Disable automatically pressing START after each reset.")
@@ -67,9 +60,9 @@ def main() -> None:
         exploration_epsilon=0.0,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
-    )
-    vec_env = VecTransposeImage(vec_env)
-    vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")
+        frame_stack=args.frame_stack,
+        use_icm=False,
+    )
 
     algo_cls = ALGO_MAP[args.algo]
     model = algo_cls.load(str(model_path), env=vec_env, device=args.device)

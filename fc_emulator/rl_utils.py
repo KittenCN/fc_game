@@ -10,11 +10,11 @@ import gymnasium as gym
 try:  # pragma: no cover - optional dependency
     from stable_baselines3 import A2C, PPO
     from stable_baselines3.common.env_util import make_vec_env
-    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack, VecTransposeImage
     from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 except ImportError as exc:  # pragma: no cover - user guidance
     raise ImportError(
-        "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
+        "Stable-Baselines3 is required. Install the RL extras via pip install -e .[rl]."
     ) from exc
 
 from fc_emulator.rl_env import NESGymEnv, RewardConfig
@@ -24,12 +24,22 @@ from fc_emulator.wrappers import (
     DEFAULT_ACTION_SET,
     ResizeObservationWrapper,
     EpsilonRandomActionWrapper,
+    VecTransposePixelsDictWrapper,
+    VecFrameStackPixelsDictWrapper,
 )
 
 ALGO_MAP = {
     "ppo": PPO,
     "a2c": A2C,
 }
+
+try:  # pragma: no cover - optional dependency
+    from sb3_contrib import RecurrentPPO
+except ImportError:  # pragma: no cover - optional dependency
+    RecurrentPPO = None
+else:  # pragma: no cover - optional dependency
+    ALGO_MAP["rppo"] = RecurrentPPO
+
 
 @dataclass(frozen=True)
 class SkillSequences:
@@ -102,31 +112,10 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
     ensure_sequence((run_right, run_right, run_jump_right, run_jump_right), direction="forward")
     ensure_sequence((run_right, short_jump_right, short_jump_right), direction="forward")
     if run_right is not None and run_jump_right is not None:
-        ensure_sequence(
-            tuple([run_right] * 3 + [run_jump_right] * 3),
-            direction="forward",
-        )
-        ensure_sequence(
-            tuple([run_right] * 5 + [run_jump_right] * 5),
-            direction="forward",
-        )
-        ensure_sequence(
-            tuple([run_right] * 8 + [run_jump_right] * 6),
-            direction="forward",
-        )
-        ensure_sequence(
-            tuple([run_right] * 10 + [run_jump_right] * 8),
-            direction="forward",
-        )
+        ensure_sequence(tuple([run_right] * 3 + [run_jump_right] * 3), direction="forward")
+        ensure_sequence(tuple([run_right] * 5 + [run_jump_right] * 5), direction="forward")
     if run_right is not None and short_jump_right is not None:
-        ensure_sequence(
-            tuple([run_right] * 2 + [short_jump_right] * 3),
-            direction="forward",
-        )
-        ensure_sequence(
-            tuple([run_right] * 4 + [short_jump_right] * 4),
-            direction="forward",
-        )
+        ensure_sequence(tuple([run_right] * 2 + [short_jump_right] * 3), direction="forward")
 
     run_left = first_valid(find_index(combo("B", "LEFT")), find_index(combo("LEFT")))
     run_jump_left = first_valid(
@@ -137,41 +126,18 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
     ensure_sequence((run_left, run_left, run_jump_left, run_jump_left), direction="backward")
     ensure_sequence((run_left, short_jump_left, short_jump_left), direction="backward")
     if run_left is not None and run_jump_left is not None:
-        ensure_sequence(
-            tuple([run_left] * 3 + [run_jump_left] * 3),
-            direction="backward",
-        )
-        ensure_sequence(
-            tuple([run_left] * 5 + [run_jump_left] * 5),
-            direction="backward",
-        )
-        ensure_sequence(
-            tuple([run_left] * 8 + [run_jump_left] * 6),
-            direction="backward",
-        )
-        ensure_sequence(
-            tuple([run_left] * 10 + [run_jump_left] * 8),
-            direction="backward",
-        )
+        ensure_sequence(tuple([run_left] * 3 + [run_jump_left] * 3), direction="backward")
+        ensure_sequence(tuple([run_left] * 5 + [run_jump_left] * 5), direction="backward")
     if run_left is not None and short_jump_left is not None:
-        ensure_sequence(
-            tuple([run_left] * 2 + [short_jump_left] * 3),
-            direction="backward",
-        )
-        ensure_sequence(
-            tuple([run_left] * 4 + [short_jump_left] * 4),
-            direction="backward",
-        )
+        ensure_sequence(tuple([run_left] * 2 + [short_jump_left] * 3), direction="backward")
 
     neutral_jump = first_valid(find_index(combo("A")), short_jump_right, short_jump_left)
     if neutral_jump is not None:
         ensure_sequence((neutral_jump, neutral_jump), direction=None)
-        ensure_sequence((neutral_jump, neutral_jump, neutral_jump), direction=None)
 
     down = first_valid(find_index(combo("DOWN")), find_index(combo("RIGHT", "DOWN")))
     if down is not None:
         ensure_sequence((down, down, down, down), direction=None)
-        ensure_sequence(tuple([down] * 8), direction=None)
 
     return SkillSequences(
         all=tuple(sequences),
@@ -179,11 +145,6 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
         backward=tuple(backward_sequences),
         neutral=tuple(neutral_sequences),
     )
-
-
-
-
-
 
 
 def build_env(
@@ -216,7 +177,7 @@ def build_env(
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
     )
-    if resize_shape and observation_type in {"rgb", "gray"}:
+    if resize_shape and observation_type in {"rgb", "gray", "rgb_ram", "gray_ram"}:
         env = ResizeObservationWrapper(env, resize_shape)
     env = DiscreteActionWrapper(env, action_set=action_set)
     if exploration_epsilon > 0.0:
@@ -272,10 +233,13 @@ def make_vector_env(
     exploration_epsilon: float = 0.05,
     stagnation_max_frames: int | None = 900,
     stagnation_progress_threshold: int = 1,
+    frame_stack: int = 4,
+    use_icm: bool = False,
+    icm_kwargs: dict | None = None,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
-    return make_vec_env(
+    env = make_vec_env(
         build_env,
         n_envs=n_envs,
         seed=seed,
@@ -297,6 +261,23 @@ def make_vector_env(
         ),
         vec_env_cls=vec_cls,
     )
+
+    if observation_type in {"rgb", "gray"}:
+        env = VecTransposeImage(env)
+        if frame_stack > 1:
+            env = VecFrameStack(env, n_stack=frame_stack, channels_order="first")
+    elif observation_type in {"rgb_ram", "gray_ram"}:
+        env = VecTransposePixelsDictWrapper(env)
+        if frame_stack > 1:
+            env = VecFrameStackPixelsDictWrapper(env, n_stack=frame_stack)
+
+    if use_icm:
+        from fc_emulator.icm import ICMVecEnvWrapper  # pragma: no cover - optional dependency
+
+        icm_cfg = dict(icm_kwargs or {})
+        env = ICMVecEnvWrapper(env, **icm_cfg)
+
+    return env
 
 
 def parse_action_set(value: str | None):

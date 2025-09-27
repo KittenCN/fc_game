@@ -11,7 +11,7 @@ from .controller import BUTTON_ORDER, ControllerState
 from .emulator import NESEmulator
 from .renderer import ScreenRenderer
 
-ObservationKind = Literal["rgb", "gray", "ram"]
+ObservationKind = Literal["rgb", "gray", "ram", "rgb_ram", "gray_ram"]
 
 
 def _to_controller(action: np.ndarray | list[int]) -> ControllerState:
@@ -111,8 +111,8 @@ class NESGymEnv(gym.Env):
         self._last_progress_x = None
         frame = self.emulator.reset()
         frame, auto_start_presses = self._auto_start_if_needed(frame)
-        obs = self._process_observation(frame)
         ram_snapshot = self.emulator.get_ram()
+        obs = self._process_observation(frame, ram_snapshot)
         metrics = self._extract_metrics_from_ram(ram_snapshot)
         self._initialize_stagnation(metrics, ram_snapshot)
         info: dict[str, Any] = {
@@ -146,10 +146,10 @@ class NESGymEnv(gym.Env):
                 break
 
         assert last_frame is not None
-        processed = self._process_observation(last_frame)
+        ram_snapshot = self.emulator.get_ram().copy()
+        processed = self._process_observation(last_frame, ram_snapshot)
         self._episode_steps += 1
 
-        ram_snapshot = self.emulator.get_ram().copy()
         metrics = self._extract_metrics_from_ram(ram_snapshot)
         merged_info = dict(info)
         merged_info.setdefault("metrics", {}).update(metrics)
@@ -240,6 +240,11 @@ class NESGymEnv(gym.Env):
         if self._stagnation_max_frames is None:
             self._stagnation_counter = 0
             self._last_progress_x = None
+            self._last_score = None
+            self._last_player_state = None
+            self._last_world = None
+            self._last_stage = None
+            self._last_area = None
             return
         self._stagnation_counter = 0
         self._last_progress_x = self._get_mario_x(metrics, ram)
@@ -390,24 +395,34 @@ class NESGymEnv(gym.Env):
             pass
         return metrics
 
-    def _process_observation(self, frame: np.ndarray) -> np.ndarray:
+    def _process_observation(self, frame: np.ndarray, ram: np.ndarray) -> np.ndarray | dict[str, np.ndarray]:
         if self.observation_type == "rgb":
             return frame
         if self.observation_type == "gray":
             return self._rgb_to_gray(frame)
         if self.observation_type == "ram":
-            return self.emulator.get_ram()
+            return ram
+        if self.observation_type == "rgb_ram":
+            return {"pixels": frame, "ram": ram.copy()}
+        if self.observation_type == "gray_ram":
+            return {"pixels": self._rgb_to_gray(frame), "ram": ram.copy()}
         raise ValueError(f"Unsupported observation type {self.observation_type}")
 
     def _make_observation_space(self, kind: ObservationKind):
+        pixel_space = gym.spaces.Box(low=0, high=255, shape=(240, 256, 3), dtype=np.uint8)
+        gray_space = gym.spaces.Box(low=0, high=255, shape=(240, 256, 1), dtype=np.uint8)
+        ram_space = gym.spaces.Box(low=0, high=255, shape=(2048,), dtype=np.uint8)
         if kind == "rgb":
-            return gym.spaces.Box(low=0, high=255, shape=(240, 256, 3), dtype=np.uint8)
+            return pixel_space
         if kind == "gray":
-            return gym.spaces.Box(low=0, high=255, shape=(240, 256, 1), dtype=np.uint8)
+            return gray_space
         if kind == "ram":
-            return gym.spaces.Box(low=0, high=255, shape=(2048,), dtype=np.uint8)
-        raise ValueError(kind)
-
+            return ram_space
+        if kind == "rgb_ram":
+            return gym.spaces.Dict({"pixels": pixel_space, "ram": ram_space})
+        if kind == "gray_ram":
+            return gym.spaces.Dict({"pixels": gray_space, "ram": ram_space})
+        raise ValueError(kind)    
     def _rgb_to_gray(self, frame: np.ndarray) -> np.ndarray:
         gray = np.dot(frame[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
         return gray[..., None]

@@ -8,10 +8,9 @@ from typing import Optional
 
 try:  # pragma: no cover - optional dependency
     from stable_baselines3.common.callbacks import CheckpointCallback
-    from stable_baselines3.common.vec_env import VecFrameStack, VecTransposeImage
 except ImportError as exc:  # pragma: no cover - user guidance
     raise SystemExit(
-        "Stable-Baselines3 is required. Install the RL extras via `pip install -e .[rl]`."
+        "Stable-Baselines3 is required. Install the RL extras via pip install -e .[rl]."
     ) from exc
 
 from .callbacks import EpisodeLogCallback, ExplorationEpsilonCallback, EntropyCoefficientCallback
@@ -40,7 +39,11 @@ def main() -> None:
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--max-episode-steps", type=int, default=5_000)
-    parser.add_argument("--observation-type", choices=["rgb", "gray"], default="gray")
+    parser.add_argument(
+        "--observation-type",
+        choices=["rgb", "gray", "rgb_ram", "gray_ram", "ram"],
+        default="gray",
+    )
     parser.add_argument(
         "--action-set",
         help="Preset name (default/simple/smb_forward) or custom combos like 'RIGHT;A,RIGHT;B'",
@@ -127,13 +130,48 @@ def main() -> None:
         help="Timesteps over which to decay entropy coefficient (0 keeps it constant).",
     )
     parser.add_argument(
+        "--icm",
+        action="store_true",
+        help="Enable intrinsic curiosity module (requires pixel observations).",
+    )
+    parser.add_argument(
+        "--icm-beta",
+        type=float,
+        default=0.2,
+        help="Weighting between inverse and forward curiosity losses (default: 0.2).",
+    )
+    parser.add_argument(
+        "--icm-eta",
+        type=float,
+        default=0.01,
+        help="Scaling factor applied to intrinsic rewards (default: 0.01).",
+    )
+    parser.add_argument(
+        "--icm-lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate for the curiosity module (default: 1e-4).",
+    )
+    parser.add_argument(
+        "--icm-feature-dim",
+        type=int,
+        default=256,
+        help="Latent feature dimension used by the curiosity encoder.",
+    )
+    parser.add_argument(
+        "--icm-hidden-dim",
+        type=int,
+        default=256,
+        help="Hidden layer width for curiosity forward/inverse models.",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
         help="Policy/network configuration preset (mario_large increases GPU load).",
     )
     parser.add_argument("--policy", help="Override policy id (default derived from preset)")
-    parser.add_argument("--n-steps", type=int, help="Override PPO/A2C rollout length")
+    parser.add_argument("--n-steps", type=int, help="Override rollout length (per env)")
     parser.add_argument("--batch-size", type=int, help="Override mini-batch size")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
@@ -161,6 +199,17 @@ def main() -> None:
     stagnation_max_frames = None if args.stagnation_frames <= 0 else args.stagnation_frames
     stagnation_progress_threshold = max(0, args.stagnation_progress)
 
+    icm_enabled = bool(args.icm)
+    if icm_enabled and args.observation_type == "ram":
+        raise SystemExit("ICM requires pixel observations (rgb/gray or rgb_ram/gray_ram).")
+    icm_kwargs = {
+        "beta": float(args.icm_beta),
+        "eta": float(args.icm_eta),
+        "learning_rate": float(args.icm_lr),
+        "feature_dim": int(args.icm_feature_dim),
+        "hidden_dim": int(args.icm_hidden_dim),
+    }
+
     exploration_epsilon = max(0.0, args.exploration_epsilon)
     exploration_final_epsilon = args.exploration_final_epsilon
     if exploration_final_epsilon is None:
@@ -171,9 +220,24 @@ def main() -> None:
         exploration_epsilon = exploration_final_epsilon
 
     policy_preset = POLICY_PRESETS[args.policy_preset]
-    policy_id = args.policy or policy_preset.policy
+    policy_name = args.policy or policy_preset.policy
     policy_kwargs = dict(policy_preset.policy_kwargs)
     algo_kwargs = dict(policy_preset.algo_kwargs)
+
+    observation_is_multi = args.observation_type in {"rgb_ram", "gray_ram"}
+    is_multi_policy = policy_name.startswith("MultiInput")
+    if observation_is_multi and not is_multi_policy:
+        raise SystemExit(
+            "rgb_ram/gray_ram observations require a MultiInput* policy (choose a mario_dual preset or set --policy MultiInputPolicy)."
+        )
+    if not observation_is_multi and is_multi_policy:
+        raise SystemExit(
+            "MultiInput policies expect rgb_ram/gray_ram observations. Choose an image-only preset or adjust --observation-type."
+        )
+
+    is_lstm_policy = policy_name in {"CnnLstmPolicy", "MultiInputLstmPolicy"}
+    if is_lstm_policy and args.algo != "rppo":
+        raise SystemExit("LSTM-based presets require --algo rppo (sb3-contrib RecurrentPPO).")
 
     if args.n_steps:
         algo_kwargs["n_steps"] = args.n_steps
@@ -215,9 +279,10 @@ def main() -> None:
         exploration_epsilon=exploration_epsilon,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
+        frame_stack=args.frame_stack,
+        use_icm=icm_enabled,
+        icm_kwargs=icm_kwargs if icm_enabled else None,
     )
-    vec_env = VecTransposeImage(vec_env)
-    vec_env = VecFrameStack(vec_env, n_stack=args.frame_stack, channels_order="first")
 
     algo_cls = ALGO_MAP[args.algo]
     tensorboard_log = str(log_dir) if args.tensorboard else None
@@ -230,7 +295,7 @@ def main() -> None:
             model.tensorboard_log = tensorboard_log
     else:
         model = algo_cls(
-            policy_id,
+            policy_name,
             vec_env,
             verbose=1,
             tensorboard_log=tensorboard_log,
@@ -282,4 +347,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
