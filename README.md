@@ -1,24 +1,38 @@
 # FC Emulator Toolkit
 
-FC Emulator Toolkit 是一个围绕 [`nes-py`](https://github.com/Kautenja/nes-py) 构建的 NES 游戏强化学习与手动游玩工具箱。项目提供从原始 `.nes` ROM 到 Gymnasium 环境、策略网络、训练脚本、日志分析的一站式支持，帮助你快速验证各类强化学习算法（PPO/A2C/RecurrentPPO 等）在经典红白机游戏上的表现。
+FC Emulator Toolkit 基于 [`nes-py`](https://github.com/Kautenja/nes-py) 构建，提供从 NES ROM 加载、Gymnasium 环境封装、策略库、训练脚本到日志分析的一体化工作流。近期完成的重构聚焦于环境抽象、探索机制、训练诊断与日志分析，使得在经典红白机游戏上的强化学习实验更稳定、更易复现。
 
-## 核心特性
-- **即插即用的 NES 环境**：封装 `NESGymEnv`，支持 RAM、灰度、RGB 及图像+RAM 组合观测，内置自动按 START 跳过开场动画。
-- **丰富的动作与探索策略**：提供多套离散动作模板、热点驱动的宏动作探索、ICM 内在奖励等机制，降低训练早期停滞概率。
-- **策略网络预设**：内建多种 CNN / MultiInput / LSTM 结构（`POLICY_PRESETS`），可根据算力快速切换。
-- **训练流程完整**：`train.py`/`infer.py`/`cli.py` 覆盖训练、推理、手动游玩，支持 TensorBoard、断点续训、模型按频率自动保存。
-- **训练日志分析**：`fc_emulator.analysis` 可统计热点路段、停滞原因、负回合比例、内在奖励等信息，协助定位训练瓶颈。
+## 项目亮点
+- **模块化环境封装**：`fc_emulator.rl_env` 使用全新的 `AutoStartController` 与 `StagnationMonitor`，自动跳过开场动画并按照实际前进距离动态放宽停滞阈值，同时在 `info.metrics` 中写入 `stagnation_reason` 与热点信息。
+- **动作/探索组件解耦**：动作模板、图像处理与宏动作探索分别迁移至 `actions.py`、`observation.py`、`exploration.py`，`wrappers.py` 仅作为兼容入口，便于扩展自定义策略组合。
+- **结构化训练配置**：`train.py` 通过 `TrainingConfig` 统一封装环境、算法、探索与日志参数，启动时自动导出 `runs/run_config.json`，新增 `--diagnostics-log-interval` 控制诊断频率。
+- **在线诊断回调**：`DiagnosticsLoggingCallback` 周期性输出平均前进距离、内在奖励与停滞原因比例至 TensorBoard（`diagnostics/*`），与 Episode JSONL 日志互补。
+- **增强日志分析**：`fc_emulator.analysis` 现支持 `--json` 输出、停滞原因分布、最近窗口前进均值等统计，处理大体量 JSONL 时无需将全部数据载入内存。
 
-## 安装
-项目默认依赖 Python ≥ 3.10。
-
-```bash
-pip install -e .           # 基础功能（手动游玩）
-pip install -e .[rl]      # 强化学习相关依赖（Stable-Baselines3、Gymnasium 等）
-# 如需图像缩放，可按需安装 pillow 或 opencv-python
+## 目录结构
+```
+fc_emulator/
+├── actions.py              # 离散动作模板与包装器
+├── auto_start.py           # 标题画面自动跳过控制器
+├── exploration.py          # 宏动作/热点驱动探索包装
+├── observation.py          # 图像缩放与帧堆叠包装
+├── stagnation.py           # 停滞检测与动态阈值模块
+├── rl_env.py               # NESGymEnv 主环境
+├── rl_utils.py             # 向量化环境构建与算法映射
+├── callbacks.py            # 训练期回调（日志、诊断、熵/ε 调度）
+├── analysis.py             # JSONL 日志分析工具
+├── train.py / infer.py     # 训练与推理入口
+└── wrappers.py             # 向后兼容的聚合入口
 ```
 
-建议在虚拟环境中安装，并确认显卡驱动已满足 PyTorch 对 CUDA 的要求。
+## 安装
+要求 Python ≥ 3.10，推荐使用虚拟环境：
+
+```bash
+pip install -e .          # 仅运行模拟器 / CLI
+pip install -e .[rl]      # 启用强化学习（Stable-Baselines3、Gymnasium 等）
+# 若需图像缩放，可额外安装 pillow 或 opencv-python
+```
 
 ## 快速上手
 ### 手动游玩
@@ -27,66 +41,56 @@ python -m fc_emulator.cli --rom roms/SuperMarioBros.nes
 ```
 默认按键：`WASD`（方向）、`J`（A）、`K`（B）、`Enter`（Start）、`Right Shift`（Select）。
 
-### 训练示例（PPO）
+### 强化学习训练（PPO 示例）
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
-    --algo ppo --total-timesteps 1000000 --tensorboard \
-    --num-envs 6 --vec-env subproc --frame-skip 4 --frame-stack 4 \
-    --reward-profile smb_progress --observation-type gray
+  --algo ppo --total-timesteps 1000000 --num-envs 6 --vec-env subproc \
+  --frame-skip 4 --frame-stack 4 --reward-profile smb_progress \
+  --observation-type gray --tensorboard --diagnostics-log-interval 2000
 ```
-常用参数说明：
-- `--observation-type`：`rgb` / `gray` / `ram` / `rgb_ram` / `gray_ram`。
-- `--resize H W`：在送入策略前对图像降采样，例如 `--resize 84 84`。
-- `--action-set`：选择预设动作集（`default`、`simple`、`smb_forward`）或自定义组合，如 `"RIGHT;A,RIGHT;B"`。
-- `--exploration-epsilon` 与 `--entropy-*`：搭配自适应回调，控制探索强度、熵系数衰减。
-- `--reward-profile`：选择奖励塑形策略，默认 `none`，可使用 `smb_progress`、`smb_dense`。
-- `--icm`：启用 ICM 内在奖励，需使用像素观测。
+常用参数：
+- `--observation-type`：`rgb` / `gray` / `ram` / `rgb_ram` / `gray_ram`
+- `--resize H W`：送入策略前的降采样尺寸，如 `--resize 84 84`
+- `--action-set`：选择预设动作（`default`、`simple`、`smb_forward`）或自定义组合 `"RIGHT;A,RIGHT;B"`
+- `--exploration-epsilon` / `--exploration-final-epsilon` / `--exploration-decay-steps`
+- `--entropy-*`：配合 `EntropyCoefficientCallback` 线性衰减策略熵系数
+- `--reward-profile`：`none` / `smb_progress` / `smb_dense`
+- `--icm`：启用内在奖励模块（需像素观测）
+- `--diagnostics-log-interval`：诊断信息写入间隔（默认 5000 步）
 
-### 训练断点与推理
-- 训练完成后会在 `runs/` 下保存 `ppo_agent_时间戳.zip`。
-- 再次运行 `train.py` 时会自动加载最新断点。
-- 推理示例：
+训练流程会自动：
+1. 在 `runs/run_config.json` 存储完整配置以便复现；
+2. 如存在断点，加载最新 `ppo_agent_*.zip`；
+3. 将诊断指标写入 TensorBoard，并持续以 JSONL 记录每个 episode 的奖励/停滞信息。
 
+### 推理示例
 ```bash
 python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
-    --model runs/ppo_agent_XXXXXX.zip --observation-type gray \
-    --frame-stack 4 --episodes 3 --deterministic
+  --model runs/ppo_agent_XXXXXX.zip --observation-type gray \
+  --frame-stack 4 --episodes 3 --deterministic
 ```
 
-## 日志分析与调试
-训练脚本可通过 `EpisodeLogCallback` 写入 JSONL 日志（默认 `runs/episode_log.jsonl`）。分析工具示例：
+## 日志与分析
+- 训练时 `EpisodeLogCallback` 默认写入 `runs/episode_log.jsonl`，记录基础奖励、塑形奖励、内在奖励与 `metrics.stagnation_reason`。
+- `DiagnosticsLoggingCallback` 会把平均 `mario_x`、内在奖励、停滞原因占比写入 TensorBoard（`diagnostics/*`）。
+- 使用分析工具快速汇总：
+  ```bash
+  python -m fc_emulator.analysis runs/episode_log.jsonl --bucket-size 32 --top 10
+  python -m fc_emulator.analysis runs/episode_log.jsonl --json  # 以 JSON 输出
+  ```
+  统计结果包含平均/中位/最大前进距离、最近 200 回合均值、停滞原因分布、热点区间、负回合比例、内在奖励与终止原因等。
 
-```bash
-python -m fc_emulator.analysis runs/episode_log.jsonl --bucket-size 32 --top 10
-```
-输出包含：
-- 平均/中位数 `mario_x` 前进距离与最大值，识别训练进展。
-- 负回合占比、内在奖励均值，评估探索质量。
-- 停滞（stagnation）发生次数及平均帧数。
-- 常见终止原因（如 `stagnation`、`time_limit`）。
-- 前进热点区间，定位难点路段。
+## 近期问题与解决方案
+- **训练频繁被停滞截断**：旧版停滞阈值固定 752 帧，导致中后期探索仍被提前结束。`StagnationMonitor` 现根据最大前进距离自适应放宽阈值，并在日志中标注停滞原因。
+- **热点集中在 1-1 楼梯与 1-2 坑口**：JSONL 日志显示 `mario_x` 主要聚集在 576–736 与 288–320 桶。重构宏动作库（`MacroSequenceLibrary`）并保留热点信息，使探索包装器能针对性插入前进组合。
+- **训练配置难以复现**：CLI 参数分散且无持久化。`TrainingConfig` 统一封装全部参数、导出 `run_config.json`，同时新增 `--diagnostics-log-interval` 调整诊断频率。
+- **诊断信号分散**：新增 `DiagnosticsLoggingCallback` 汇总平均前进距离、内在奖励与停滞原因比例；分析工具新增停滞原因统计与 JSON 导出，方便自动化处理。
+- **包装器维护困难**：原 `wrappers.py` 集成绩效、宏动作与图像变换，维护成本高。现将动作、探索、观测处理拆分为独立模块，同时保留聚合入口兼容旧代码。
 
-这些统计有助于判断是否需要调整奖励函数、探索参数或宏动作序列。
+## 后续计划
+- 将 `stagnation_reason` 统计用于在线调节 ε/宏动作权重，构建自适应探索策略。
+- 基于 `run_config.json` 提供批量实验与网格搜索工具，简化调参流程。
+- 在分析工具中加入多实验对比与可视化脚本，自动展示热点演化趋势。
+- 完善文档与教程，示例化 TensorBoard 诊断指标与 JSONL 二次分析方法。
 
-## 项目结构
-```
-fc_emulator/
-├── rl_env.py          # Gymnasium 兼容的 NES 环境封装
-├── wrappers.py        # 动作包装、探索与图像处理辅助
-├── rl_utils.py        # 向量环境工厂、策略映射、动作预设
-├── policies.py        # 特征提取器与策略预设
-├── rewards.py         # Super Mario Bros 奖励塑形
-├── callbacks.py       # 训练日志、探索/熵衰减回调
-├── icm.py             # Intrinsic Curiosity Module 包装
-├── train.py / infer.py
-└── cli.py             # 手动游玩入口
-```
-示例脚本位于 `examples/`，可用于验证环境与控制器。
-
-## 开发规划（节选）
-- 增强 ICM 超参数搜索与可视化，降低探索停滞。
-- 丰富状态保存/恢复能力与训练监控指标。
-- 探索 LSTM / Transformer 策略及分阶段课程学习。
-- 继续完善 README、教程与调参策略文档。
-
-欢迎提交 Issue/PR，共同完善 FC Emulator Toolkit！
+欢迎通过 Issue / PR 反馈需求，共同完善 FC Emulator Toolkit。

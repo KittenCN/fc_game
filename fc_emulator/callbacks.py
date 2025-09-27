@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -151,7 +151,12 @@ class EpisodeLogCallback(BaseCallback):
         self._buffer.clear()
 
 
-__all__ = ["EpisodeLogCallback", "ExplorationEpsilonCallback", "EntropyCoefficientCallback"]
+__all__ = [
+    "DiagnosticsLoggingCallback",
+    "EpisodeLogCallback",
+    "ExplorationEpsilonCallback",
+    "EntropyCoefficientCallback",
+]
 
 
 class ExplorationEpsilonCallback(BaseCallback):
@@ -232,3 +237,57 @@ class EntropyCoefficientCallback(BaseCallback):
             return
         self.model.ent_coef = float(value)
         self._last_value = float(value)
+
+
+class DiagnosticsLoggingCallback(BaseCallback):
+    """Stream environment diagnostics to the SB3 logger at a fixed cadence."""
+
+    def __init__(self, *, log_interval: int = 5000) -> None:
+        super().__init__()
+        self.log_interval = max(1, int(log_interval))
+        self._last_logged = 0
+        self._buffer_positions: list[float] = []
+        self._buffer_rewards: list[float] = []
+        self._reason_counts: Counter[str] = Counter()
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos") or []
+        for info in infos:
+            metrics = info.get("metrics") or {}
+            x_pos = metrics.get("mario_x")
+            if isinstance(x_pos, (int, float)):
+                self._buffer_positions.append(float(x_pos))
+            intrinsic = info.get("intrinsic_reward")
+            if intrinsic is None:
+                intrinsic = metrics.get("intrinsic_reward")
+            if isinstance(intrinsic, (int, float)):
+                self._buffer_rewards.append(float(intrinsic))
+            reason = metrics.get("stagnation_reason")
+            if isinstance(reason, str) and reason:
+                self._reason_counts[reason] += 1
+
+        if self.num_timesteps - self._last_logged < self.log_interval:
+            return True
+
+        logger = getattr(self.model, "logger", None)
+        if logger is not None:
+            if self._buffer_positions:
+                mean_x = sum(self._buffer_positions) / len(self._buffer_positions)
+                logger.record("diagnostics/mario_x_mean", mean_x)
+                logger.record("diagnostics/mario_x_max", max(self._buffer_positions))
+            if self._buffer_rewards:
+                mean_intrinsic = sum(self._buffer_rewards) / len(self._buffer_rewards)
+                logger.record("diagnostics/intrinsic_mean", mean_intrinsic)
+            total_reasons = sum(self._reason_counts.values())
+            if total_reasons:
+                for reason, count in self._reason_counts.items():
+                    ratio = count / float(total_reasons)
+                    logger.record(f"diagnostics/stagnation_{reason}", ratio)
+            logger.record("diagnostics/last_log_step", float(self.num_timesteps))
+            logger.dump(self.num_timesteps)
+
+        self._buffer_positions.clear()
+        self._buffer_rewards.clear()
+        self._reason_counts.clear()
+        self._last_logged = self.num_timesteps
+        return True

@@ -17,16 +17,14 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via pip install -e .[rl]."
     ) from exc
 
-from fc_emulator.rl_env import NESGymEnv, RewardConfig
-from fc_emulator.wrappers import (
-    ACTION_PRESETS,
-    DiscreteActionWrapper,
-    DEFAULT_ACTION_SET,
+from fc_emulator.actions import DEFAULT_ACTION_SET, DiscreteActionWrapper, resolve_action_set
+from fc_emulator.exploration import EpsilonRandomActionWrapper, MacroSequenceLibrary
+from fc_emulator.observation import (
     ResizeObservationWrapper,
-    EpsilonRandomActionWrapper,
-    VecTransposePixelsDictWrapper,
     VecFrameStackPixelsDictWrapper,
+    VecTransposePixelsDictWrapper,
 )
+from fc_emulator.rl_env import NESGymEnv, RewardConfig
 
 ALGO_MAP = {
     "ppo": PPO,
@@ -197,14 +195,17 @@ def build_env(
         if stagnation_max_frames:
             candidate = max(45, int(stagnation_max_frames) // 5)
             stagnation_threshold = max(45, min(candidate, int(stagnation_max_frames)))
-        env = EpsilonRandomActionWrapper(
-            env,
-            exploration_epsilon,
+        sequence_library = MacroSequenceLibrary(
             skill_actions=skill_actions,
             skill_sequences=skill_sequences.all,
             forward_sequences=skill_sequences.forward,
             backward_sequences=skill_sequences.backward,
             neutral_sequences=skill_sequences.neutral,
+        )
+        env = EpsilonRandomActionWrapper(
+            env,
+            exploration_epsilon,
+            sequences=sequence_library,
             stagnation_threshold=stagnation_threshold,
             stagnation_boost=0.5,
         )
@@ -293,9 +294,11 @@ def make_vector_env(
 def parse_action_set(value: str | None):
     if value is None:
         return DEFAULT_ACTION_SET
-    preset = ACTION_PRESETS.get(value.lower())
-    if preset is not None:
-        return preset
+    if ";" not in value and "," not in value:
+        try:
+            return resolve_action_set(value)
+        except KeyError:
+            pass
     combos: list[tuple[str, ...]] = []
     for item in value.split(";"):
         combo = tuple(part.strip().upper() for part in item.split(",") if part.strip())

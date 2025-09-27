@@ -7,9 +7,11 @@ from typing import Any, Callable, Literal
 import gymnasium as gym
 import numpy as np
 
+from .auto_start import AutoStartConfig, AutoStartController
 from .controller import BUTTON_ORDER, ControllerState
 from .emulator import NESEmulator
 from .renderer import ScreenRenderer
+from .stagnation import StagnationConfig, StagnationMonitor
 
 ObservationKind = Literal["rgb", "gray", "ram", "rgb_ram", "gray_ram"]
 
@@ -71,29 +73,23 @@ class NESGymEnv(gym.Env):
         self._renderer: ScreenRenderer | None = None
         self.render_mode = render_mode
         self._episode_steps = 0
-        self.auto_start = auto_start
-        self._auto_start_max_frames = max(1, auto_start_max_frames)
-        self._auto_start_press_frames = max(1, auto_start_press_frames)
-        self._auto_start_timer_threshold = 401
-        self._start_press_state = ControllerState(START=True)
-        self._noop_state = ControllerState()
         self._last_auto_start_presses = 0
-        self._stagnation_max_frames = (
+
+        auto_start_cfg = AutoStartConfig(
+            max_frames=auto_start_max_frames,
+            press_frames=auto_start_press_frames,
+        )
+        self._auto_start_controller = AutoStartController(auto_start_cfg, enabled=auto_start)
+
+        base_frames = (
             None
             if stagnation_max_frames is None or stagnation_max_frames <= 0
             else int(stagnation_max_frames)
         )
-        self._stagnation_progress_threshold = max(0, int(stagnation_progress_threshold))
-        self._stagnation_counter = 0
-        self._last_progress_x: int | None = None
-        self._max_progress_x: int = 0
-        self._stagnation_last_limit: int | None = None
-        self._stagnation_bonus_scale = 0.25
-        self._last_score: int | None = None
-        self._last_player_state: int | None = None
-        self._last_world: int | None = None
-        self._last_stage: int | None = None
-        self._last_area: int | None = None
+        progress_threshold = max(0, int(stagnation_progress_threshold))
+        self._stagnation_monitor = StagnationMonitor(
+            StagnationConfig(base_frames=base_frames, progress_threshold=progress_threshold)
+        )
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
         self.observation_space = self._make_observation_space(observation_type)
@@ -101,7 +97,7 @@ class NESGymEnv(gym.Env):
     @property
     def stagnation_counter(self) -> int:
         """Expose current stagnation frame count for wrappers."""
-        return int(self._stagnation_counter)
+        return int(self._stagnation_monitor.counter)
 
 
     # Gym API ---------------------------------------------------------------
@@ -110,17 +106,16 @@ class NESGymEnv(gym.Env):
         if self.reward_config:
             self.reward_config.reset()
         self._episode_steps = 0
-        self._stagnation_counter = 0
-        self._last_progress_x = None
         frame = self.emulator.reset()
-        frame, auto_start_presses = self._auto_start_if_needed(frame)
+        frame, auto_start_presses = self._auto_start_controller.warmup(
+            self.emulator, initial_frame=frame
+        )
+        self._last_auto_start_presses = auto_start_presses
         ram_snapshot = self.emulator.get_ram()
-        obs = self._process_observation(frame, ram_snapshot)
         metrics = self._extract_metrics_from_ram(ram_snapshot)
-        self._initialize_stagnation(metrics, ram_snapshot)
-        info: dict[str, Any] = {
-            "metrics": metrics
-        }
+        self._stagnation_monitor.reset(metrics, ram_snapshot)
+        obs = self._process_observation(frame, ram_snapshot)
+        info: dict[str, Any] = {"metrics": metrics}
         if auto_start_presses:
             diagnostics = info.setdefault("diagnostics", {})
             diagnostics["auto_start_presses"] = auto_start_presses
@@ -158,18 +153,20 @@ class NESGymEnv(gym.Env):
         merged_info.setdefault("metrics", {}).update(metrics)
         base_reward_value = total_reward
 
-        stagnation_frames: int | None = None
-        if self._stagnation_max_frames is not None and not terminated:
-            triggered, frames = self._update_stagnation(metrics, ram_snapshot)
-            if triggered:
-                truncated = True
-                stagnation_frames = frames
-                merged_info["stagnation_truncated"] = True
-        if stagnation_frames is not None:
-            merged_info["stagnation_frames"] = stagnation_frames
-        current_limit = self._stagnation_last_limit or self._current_stagnation_limit()
-        if current_limit is not None:
-            merged_info.setdefault("diagnostics", {})["stagnation_limit"] = int(current_limit)
+        status = self._stagnation_monitor.update(metrics, ram_snapshot, frame_skip=self.frame_skip)
+        diagnostics = merged_info.setdefault("diagnostics", {})
+        diagnostics["stagnation_counter"] = int(self._stagnation_monitor.counter)
+        if status.limit is not None:
+            diagnostics["stagnation_limit"] = int(status.limit)
+        if status.reason:
+            diagnostics["stagnation_reason"] = status.reason
+            merged_info.setdefault("metrics", {})["stagnation_reason"] = status.reason
+        if status.frames is not None:
+            merged_info["stagnation_frames"] = status.frames
+            diagnostics["stagnation_frames"] = status.frames
+        if not terminated and status.triggered:
+            truncated = True
+            merged_info["stagnation_truncated"] = True
 
 
         if self.reward_config:
@@ -182,13 +179,10 @@ class NESGymEnv(gym.Env):
                 step=self._episode_steps,
             )
             total_reward = self.reward_config.compute(context)
-            diagnostics = merged_info.setdefault("diagnostics", {})
             diagnostics["base_reward"] = base_reward_value
             diagnostics["shaped_reward"] = total_reward
-            if stagnation_frames is not None:
-                diagnostics.setdefault("stagnation_frames", stagnation_frames)
-        elif stagnation_frames is not None:
-            merged_info.setdefault("diagnostics", {})["stagnation_frames"] = stagnation_frames
+        elif status.frames is not None:
+            diagnostics["stagnation_frames"] = status.frames
 
         if self.render_mode == "human":
             self._ensure_renderer()
@@ -213,190 +207,6 @@ class NESGymEnv(gym.Env):
         super().close()
 
     # Internal helpers -----------------------------------------------------
-    def _auto_start_if_needed(self, frame: np.ndarray) -> tuple[np.ndarray, int]:
-        if not self.auto_start:
-            self._last_auto_start_presses = 0
-            return frame, 0
-        presses = 0
-        frames_spent = 0
-        current_frame = frame
-        while frames_spent < self._auto_start_max_frames and self._needs_auto_start_press():
-            current_frame, _reward, done, _info = self.emulator.step(self._start_press_state)
-            presses += 1
-            frames_spent += 1
-            if done:
-                current_frame = self.emulator.reset()
-                frames_spent = 0
-                continue
-            release_frames = 0
-            while (
-                release_frames < self._auto_start_press_frames
-                and frames_spent < self._auto_start_max_frames
-            ):
-                current_frame, _reward, done, _info = self.emulator.step(self._noop_state)
-                release_frames += 1
-                frames_spent += 1
-                if done:
-                    current_frame = self.emulator.reset()
-                    frames_spent = 0
-                    break
-        self._last_auto_start_presses = presses
-        return current_frame, presses
-
-    def _initialize_stagnation(self, metrics: dict[str, int], ram: np.ndarray) -> None:
-        if self._stagnation_max_frames is None:
-            self._stagnation_counter = 0
-            self._last_progress_x = None
-            self._last_score = None
-            self._last_player_state = None
-            self._last_world = None
-            self._last_stage = None
-            self._last_area = None
-            self._max_progress_x = 0
-            self._stagnation_last_limit = None
-            return
-        self._stagnation_counter = 0
-        self._last_progress_x = self._get_mario_x(metrics, ram)
-        self._last_score = metrics.get("score")
-        self._last_player_state = metrics.get("player_state")
-        self._last_world = metrics.get("world")
-        self._last_stage = metrics.get("stage")
-        self._last_area = metrics.get("area")
-        self._max_progress_x = self._last_progress_x or 0
-        self._stagnation_last_limit = self._current_stagnation_limit()
-
-    def _current_stagnation_limit(self) -> int | None:
-        if self._stagnation_max_frames is None:
-            return None
-        base = int(self._stagnation_max_frames)
-        if self._max_progress_x <= 0:
-            return base
-        bonus = int(self._max_progress_x * self._stagnation_bonus_scale)
-        bonus = min(base, max(0, bonus))
-        return base + bonus
-
-    def _update_stagnation(
-        self, metrics: dict[str, int], ram: np.ndarray
-    ) -> tuple[bool, int | None]:
-        if self._stagnation_max_frames is None:
-            return False, None
-
-        current_x = self._get_mario_x(metrics, ram)
-        if self._last_progress_x is None:
-            self._last_progress_x = current_x
-            self._stagnation_counter = 0
-            self._max_progress_x = current_x
-            self._last_score = metrics.get("score")
-            self._last_player_state = metrics.get("player_state")
-            self._last_world = metrics.get("world")
-            self._last_stage = metrics.get("stage")
-            self._last_area = metrics.get("area")
-            self._stagnation_last_limit = self._current_stagnation_limit()
-            return False, None
-
-        progressed = False
-
-        if current_x > self._last_progress_x:
-            delta = current_x - self._last_progress_x
-            if delta >= self._stagnation_progress_threshold:
-                self._stagnation_counter = 0
-            else:
-                self._stagnation_counter = max(0, self._stagnation_counter - self.frame_skip)
-            self._last_progress_x = max(self._last_progress_x, current_x)
-            self._max_progress_x = max(self._max_progress_x, current_x)
-            progressed = True
-
-        world = metrics.get("world")
-        stage = metrics.get("stage")
-        area = metrics.get("area")
-
-        if (
-            (world is not None and world != self._last_world)
-            or (stage is not None and stage != self._last_stage)
-            or (area is not None and area != self._last_area)
-        ):
-            self._stagnation_counter = 0
-            self._last_progress_x = current_x
-            self._max_progress_x = max(self._max_progress_x, current_x)
-            progressed = True
-
-        if world is not None:
-            self._last_world = world
-        if stage is not None:
-            self._last_stage = stage
-        if area is not None:
-            self._last_area = area
-
-        relief_frames = 0
-
-        score = metrics.get("score")
-        if score is not None:
-            prev_score = self._last_score
-            delta_score = score - prev_score if prev_score is not None else score
-            if delta_score > 0 and not progressed:
-                relief_frames = max(relief_frames, self.frame_skip * (6 + min(delta_score, 50) // 2))
-            self._last_score = score
-
-        player_state = metrics.get("player_state")
-        if player_state is not None:
-            prev_state = self._last_player_state
-            if prev_state is None or player_state > prev_state:
-                relief_frames = max(relief_frames, self.frame_skip * 45)
-            self._last_player_state = player_state
-
-        if not progressed and relief_frames:
-            self._stagnation_counter = max(0, self._stagnation_counter - relief_frames)
-            if self._stagnation_counter == 0:
-                progressed = True
-
-        limit = self._current_stagnation_limit()
-        self._stagnation_last_limit = limit
-
-        if progressed:
-            return False, None
-
-        self._stagnation_counter += self.frame_skip
-        threshold = limit if limit is not None else self._stagnation_max_frames
-        if threshold is not None and self._stagnation_counter >= threshold:
-            triggered_frames = self._stagnation_counter
-            self._stagnation_counter = 0
-            self._last_progress_x = current_x
-            return True, triggered_frames
-        return False, None
-
-
-    @staticmethod
-    def _get_mario_x(metrics: dict[str, int], ram: np.ndarray) -> int:
-        x_pos = metrics.get("mario_x")
-        if x_pos is None:
-            x_pos = int(ram[0x6D]) * 256 + int(ram[0x86])
-        return int(x_pos)
-
-    def _needs_auto_start_press(self) -> bool:
-        ram_snapshot = self.emulator.get_ram()
-        timer = self._decode_timer_from_ram(ram_snapshot)
-        # Super Mario Bros keeps the timer at 401 on the title screen; it drops once gameplay begins.
-        if timer is None:
-            return False
-        if timer <= self._auto_start_timer_threshold - 1:
-            return False
-        if len(ram_snapshot) > 0x0770:
-            # Known NES gameplay state codes when the level is active (SMB heuristic).
-            game_mode = int(ram_snapshot[0x0770])
-            if game_mode in (0x06, 0x07):
-                return False
-        return True
-
-    @staticmethod
-    def _decode_timer_from_ram(ram: np.ndarray) -> int | None:
-        try:
-            hundreds = int(ram[0x07F8]) & 0x0F
-            tens = int(ram[0x07F9]) & 0x0F
-            ones = int(ram[0x07FA]) & 0x0F
-        except IndexError:
-            return None
-        return hundreds * 100 + tens * 10 + ones
-
     def _step_once(self, controller: ControllerState):
         frame, reward, done, info = self.emulator.step(controller)
         return frame, reward, done, info

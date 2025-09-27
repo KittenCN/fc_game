@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:  # pragma: no cover - optional dependency
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -13,7 +15,12 @@ except ImportError as exc:  # pragma: no cover - user guidance
         "Stable-Baselines3 is required. Install the RL extras via pip install -e .[rl]."
     ) from exc
 
-from .callbacks import EpisodeLogCallback, ExplorationEpsilonCallback, EntropyCoefficientCallback
+from .callbacks import (
+    DiagnosticsLoggingCallback,
+    EpisodeLogCallback,
+    ExplorationEpsilonCallback,
+    EntropyCoefficientCallback,
+)
 from .policies import POLICY_PRESETS
 from .rewards import REWARD_PRESETS
 from .rl_utils import (
@@ -24,10 +31,198 @@ from .rl_utils import (
 )
 
 
+def _serialise_config(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _serialise_config(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_serialise_config(item) for item in value]
+    return repr(value)
+
+
+@dataclass
+class TrainingConfig:
+    rom: Path
+    log_dir: Path
+    algo: str
+    total_timesteps: int
+    num_envs: int
+    frame_skip: int
+    frame_stack: int
+    max_episode_steps: Optional[int]
+    observation_type: str
+    action_set: tuple[tuple[str, ...], ...]
+    resize: Optional[tuple[int, int]]
+    reward_profile: Optional[str]
+    auto_start: bool
+    auto_start_max_frames: int
+    auto_start_press_frames: int
+    stagnation_max_frames: Optional[int]
+    stagnation_progress_threshold: int
+    exploration: dict[str, Any] = field(default_factory=dict)
+    exploration_env_initial: float = 0.0
+    entropy: dict[str, Any] = field(default_factory=dict)
+    icm: dict[str, Any] = field(default_factory=dict)
+    use_icm: bool = False
+    policy: str = "CnnPolicy"
+    policy_kwargs: dict[str, Any] = field(default_factory=dict)
+    algo_kwargs: dict[str, Any] = field(default_factory=dict)
+    device: str = "auto"
+    seed: int = 0
+    vec_env: str = "auto"
+    tensorboard: bool = False
+    checkpoint_freq: int = 0
+    episode_log_path: Optional[Path] = None
+    diagnostics_log_interval: int = 5000
+
+    def to_json_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["action_set"] = [list(combo) for combo in self.action_set]
+        return _serialise_config(data)
+
+
 def _find_latest_checkpoint(log_dir: Path, algo: str) -> Optional[Path]:
     pattern = f"{algo}_agent*.zip"
     checkpoints = sorted(log_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
     return checkpoints[-1] if checkpoints else None
+
+
+def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
+    rom_path = resolve_existing_path(args.rom, "ROM")
+    log_dir = Path(args.log_dir).expanduser().resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    action_set = tuple(parse_action_set(args.action_set))
+    resize_shape = tuple(int(x) for x in args.resize) if args.resize else None
+    reward_profile = None if args.reward_profile == "none" else args.reward_profile
+
+    auto_start = not args.disable_auto_start
+    auto_start_max_frames = max(1, args.auto_start_max_frames)
+    auto_start_press_frames = max(1, args.auto_start_press_frames)
+
+    stagnation_max_frames: Optional[int] = None
+    if args.stagnation_frames is not None and args.stagnation_frames > 0:
+        stagnation_max_frames = int(args.stagnation_frames)
+    stagnation_progress_threshold = max(0, int(args.stagnation_progress))
+
+    exploration_initial = max(0.0, args.exploration_epsilon)
+    exploration_final = (
+        args.exploration_final_epsilon
+        if args.exploration_final_epsilon is not None
+        else exploration_initial
+    )
+    exploration_final = max(0.0, exploration_final)
+    exploration_decay_steps = max(0, args.exploration_decay_steps)
+    env_exploration = exploration_initial if exploration_decay_steps > 0 else exploration_final
+
+    policy_preset = POLICY_PRESETS[args.policy_preset]
+    policy_name = args.policy or policy_preset.policy
+    policy_kwargs = dict(policy_preset.policy_kwargs)
+    algo_kwargs = dict(policy_preset.algo_kwargs)
+
+    observation_is_multi = args.observation_type in {"rgb_ram", "gray_ram"}
+    is_multi_policy = policy_name.startswith("MultiInput")
+    if observation_is_multi and not is_multi_policy:
+        raise SystemExit(
+            "rgb_ram/gray_ram observations require a MultiInput* policy (choose a mario_dual preset or set --policy MultiInputPolicy)."
+        )
+    if not observation_is_multi and is_multi_policy:
+        raise SystemExit(
+            "MultiInput policies expect rgb_ram/gray_ram observations. Choose an image-only preset or adjust --observation-type."
+        )
+
+    is_lstm_policy = policy_name in {"CnnLstmPolicy", "MultiInputLstmPolicy"}
+    if is_lstm_policy and args.algo != "rppo":
+        raise SystemExit("LSTM-based presets require --algo rppo (sb3-contrib RecurrentPPO).")
+
+    if args.n_steps:
+        algo_kwargs["n_steps"] = args.n_steps
+    if args.batch_size:
+        algo_kwargs["batch_size"] = args.batch_size
+
+    entropy_initial = args.entropy_coef if args.entropy_coef is not None else algo_kwargs.get("ent_coef")
+    if entropy_initial is None:
+        entropy_initial = 0.01
+    entropy_initial = float(entropy_initial)
+    algo_kwargs["ent_coef"] = entropy_initial
+
+    entropy_final = args.entropy_final_coef if args.entropy_final_coef is not None else entropy_initial
+    entropy_final = float(entropy_final)
+
+    entropy_decay_steps = max(0, args.entropy_decay_steps)
+    if entropy_decay_steps == 0:
+        algo_kwargs["ent_coef"] = entropy_final
+
+    icm_enabled = bool(args.icm)
+    if icm_enabled and args.observation_type == "ram":
+        raise SystemExit("ICM requires pixel observations (rgb/gray or rgb_ram/gray_ram).")
+    icm_kwargs = {
+        "beta": float(args.icm_beta),
+        "eta": float(args.icm_eta),
+        "learning_rate": float(args.icm_lr),
+        "feature_dim": int(args.icm_feature_dim),
+        "hidden_dim": int(args.icm_hidden_dim),
+    }
+
+    episode_log_path: Optional[Path] = None
+    if args.episode_log and args.episode_log.lower() != "none":
+        ep_path = Path(args.episode_log)
+        episode_log_path = ep_path if ep_path.is_absolute() else log_dir / ep_path
+
+    max_episode_steps = args.max_episode_steps if args.max_episode_steps > 0 else None
+
+    return TrainingConfig(
+        rom=rom_path,
+        log_dir=log_dir,
+        algo=args.algo,
+        total_timesteps=args.total_timesteps,
+        num_envs=args.num_envs,
+        frame_skip=args.frame_skip,
+        frame_stack=args.frame_stack,
+        max_episode_steps=max_episode_steps,
+        observation_type=args.observation_type,
+        action_set=action_set,
+        resize=resize_shape,
+        reward_profile=reward_profile,
+        auto_start=auto_start,
+        auto_start_max_frames=auto_start_max_frames,
+        auto_start_press_frames=auto_start_press_frames,
+        stagnation_max_frames=stagnation_max_frames,
+        stagnation_progress_threshold=stagnation_progress_threshold,
+        exploration={
+            "initial": exploration_initial,
+            "final": exploration_final,
+            "decay_steps": exploration_decay_steps,
+        },
+        exploration_env_initial=env_exploration,
+        entropy={
+            "initial": entropy_initial,
+            "final": entropy_final,
+            "decay_steps": entropy_decay_steps,
+        },
+        icm=icm_kwargs,
+        use_icm=icm_enabled,
+        policy=policy_name,
+        policy_kwargs=policy_kwargs,
+        algo_kwargs=algo_kwargs,
+        device=args.device,
+        seed=args.seed,
+        vec_env=args.vec_env,
+        tensorboard=bool(args.tensorboard),
+        checkpoint_freq=args.checkpoint_freq,
+        episode_log_path=episode_log_path,
+        diagnostics_log_interval=max(1, args.diagnostics_log_interval),
+    )
+
+
+def _save_config(config: TrainingConfig) -> Path:
+    path = config.log_dir / "run_config.json"
+    with path.open("w", encoding="utf-8") as fp:
+        json.dump(config.to_json_dict(), fp, ensure_ascii=False, indent=2)
+    return path
 
 
 def main() -> None:
@@ -177,6 +372,12 @@ def main() -> None:
     parser.add_argument("--device", default="auto", help="torch device spec, e.g. cpu or cuda")
     parser.add_argument("--log-dir", default="runs", help="Directory for checkpoints and TensorBoard logs")
     parser.add_argument("--checkpoint-freq", type=int, default=200_000)
+    parser.add_argument(
+        "--diagnostics-log-interval",
+        type=int,
+        default=5_000,
+        help="Timesteps between diagnostic logging flushes (default: 5000).",
+    )
     parser.add_argument("--tensorboard", action="store_true", help="Enable TensorBoard logging")
     parser.add_argument(
         "--episode-log",
@@ -185,160 +386,107 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    rom_path = resolve_existing_path(args.rom, "ROM")
+    config = _build_training_config(args)
 
-    log_dir = Path(args.log_dir).expanduser().resolve()
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    action_set = parse_action_set(args.action_set)
-    resize_shape = tuple(args.resize) if args.resize else None
-    reward_factory = None if args.reward_profile == "none" else REWARD_PRESETS[args.reward_profile]
-    auto_start = not args.disable_auto_start
-    auto_start_max_frames = max(1, args.auto_start_max_frames)
-    auto_start_press_frames = max(1, args.auto_start_press_frames)
-    stagnation_max_frames = None if args.stagnation_frames <= 0 else args.stagnation_frames
-    stagnation_progress_threshold = max(0, args.stagnation_progress)
-
-    icm_enabled = bool(args.icm)
-    if icm_enabled and args.observation_type == "ram":
-        raise SystemExit("ICM requires pixel observations (rgb/gray or rgb_ram/gray_ram).")
-    icm_kwargs = {
-        "beta": float(args.icm_beta),
-        "eta": float(args.icm_eta),
-        "learning_rate": float(args.icm_lr),
-        "feature_dim": int(args.icm_feature_dim),
-        "hidden_dim": int(args.icm_hidden_dim),
-    }
-
-    exploration_epsilon = max(0.0, args.exploration_epsilon)
-    exploration_final_epsilon = args.exploration_final_epsilon
-    if exploration_final_epsilon is None:
-        exploration_final_epsilon = exploration_epsilon
-    exploration_final_epsilon = max(0.0, exploration_final_epsilon)
-    exploration_decay_steps = max(0, args.exploration_decay_steps)
-    if exploration_decay_steps == 0:
-        exploration_epsilon = exploration_final_epsilon
-
-    policy_preset = POLICY_PRESETS[args.policy_preset]
-    policy_name = args.policy or policy_preset.policy
-    policy_kwargs = dict(policy_preset.policy_kwargs)
-    algo_kwargs = dict(policy_preset.algo_kwargs)
-
-    observation_is_multi = args.observation_type in {"rgb_ram", "gray_ram"}
-    is_multi_policy = policy_name.startswith("MultiInput")
-    if observation_is_multi and not is_multi_policy:
-        raise SystemExit(
-            "rgb_ram/gray_ram observations require a MultiInput* policy (choose a mario_dual preset or set --policy MultiInputPolicy)."
-        )
-    if not observation_is_multi and is_multi_policy:
-        raise SystemExit(
-            "MultiInput policies expect rgb_ram/gray_ram observations. Choose an image-only preset or adjust --observation-type."
-        )
-
-    is_lstm_policy = policy_name in {"CnnLstmPolicy", "MultiInputLstmPolicy"}
-    if is_lstm_policy and args.algo != "rppo":
-        raise SystemExit("LSTM-based presets require --algo rppo (sb3-contrib RecurrentPPO).")
-
-    if args.n_steps:
-        algo_kwargs["n_steps"] = args.n_steps
-    if args.batch_size:
-        algo_kwargs["batch_size"] = args.batch_size
-
-    entropy_initial = args.entropy_coef if args.entropy_coef is not None else algo_kwargs.get("ent_coef")
-    if entropy_initial is None:
-        entropy_initial = 0.01
-    entropy_initial = float(entropy_initial)
-    algo_kwargs["ent_coef"] = entropy_initial
-
-    entropy_final = args.entropy_final_coef if args.entropy_final_coef is not None else entropy_initial
-    entropy_final = float(entropy_final)
-
-    entropy_decay_steps = max(0, args.entropy_decay_steps)
-    if entropy_decay_steps == 0:
-        algo_kwargs["ent_coef"] = entropy_final
-
-    episode_log_path: Optional[Path] = None
-    if args.episode_log and args.episode_log.lower() != "none":
-        ep_path = Path(args.episode_log)
-        episode_log_path = ep_path if ep_path.is_absolute() else log_dir / ep_path
-
-    vec_env = make_vector_env(
-        str(rom_path),
-        frame_skip=args.frame_skip,
-        observation_type=args.observation_type,
-        action_set=action_set,
-        max_episode_steps=args.max_episode_steps,
-        n_envs=args.num_envs,
-        seed=args.seed,
-        resize_shape=resize_shape,
-        vec_env_type=args.vec_env,
-        reward_config_factory=reward_factory,
-        auto_start=auto_start,
-        auto_start_max_frames=auto_start_max_frames,
-        auto_start_press_frames=auto_start_press_frames,
-        exploration_epsilon=exploration_epsilon,
-        stagnation_max_frames=stagnation_max_frames,
-        stagnation_progress_threshold=stagnation_progress_threshold,
-        frame_stack=args.frame_stack,
-        use_icm=icm_enabled,
-        icm_kwargs=icm_kwargs if icm_enabled else None,
+    reward_factory = (
+        None if config.reward_profile is None else REWARD_PRESETS[config.reward_profile]
     )
 
-    algo_cls = ALGO_MAP[args.algo]
-    tensorboard_log = str(log_dir) if args.tensorboard else None
+    vec_env = make_vector_env(
+        str(config.rom),
+        frame_skip=config.frame_skip,
+        observation_type=config.observation_type,
+        action_set=config.action_set,
+        max_episode_steps=config.max_episode_steps,
+        n_envs=config.num_envs,
+        seed=config.seed,
+        resize_shape=config.resize,
+        vec_env_type=config.vec_env,
+        reward_config_factory=reward_factory,
+        auto_start=config.auto_start,
+        auto_start_max_frames=config.auto_start_max_frames,
+        auto_start_press_frames=config.auto_start_press_frames,
+        exploration_epsilon=config.exploration_env_initial,
+        stagnation_max_frames=config.stagnation_max_frames,
+        stagnation_progress_threshold=config.stagnation_progress_threshold,
+        frame_stack=config.frame_stack,
+        use_icm=config.use_icm,
+        icm_kwargs=config.icm if config.use_icm else None,
+    )
 
-    checkpoint_path = _find_latest_checkpoint(log_dir, args.algo)
+    algo_cls = ALGO_MAP[config.algo]
+    tensorboard_log = str(config.log_dir) if config.tensorboard else None
+
+    checkpoint_path = _find_latest_checkpoint(config.log_dir, config.algo)
     if checkpoint_path:
         print(f"Loading checkpoint: {checkpoint_path.name}")
-        model = algo_cls.load(str(checkpoint_path), env=vec_env, device=args.device)
+        model = algo_cls.load(str(checkpoint_path), env=vec_env, device=config.device)
         if tensorboard_log and hasattr(model, "tensorboard_log"):
             model.tensorboard_log = tensorboard_log
     else:
         model = algo_cls(
-            policy_name,
+            config.policy,
             vec_env,
             verbose=1,
             tensorboard_log=tensorboard_log,
-            device=args.device,
-            policy_kwargs=policy_kwargs,
-            **algo_kwargs,
+            device=config.device,
+            policy_kwargs=config.policy_kwargs,
+            **config.algo_kwargs,
         )
 
-    callbacks = []
-    if exploration_decay_steps > 0 and abs(exploration_final_epsilon - exploration_epsilon) > 1e-9:
+    callbacks: list[Any] = []
+    exploration_cfg = config.exploration
+    if (
+        exploration_cfg.get("decay_steps", 0) > 0
+        and abs(exploration_cfg["final"] - exploration_cfg["initial"]) > 1e-9
+    ):
         callbacks.append(
             ExplorationEpsilonCallback(
-                initial_epsilon=exploration_epsilon,
-                final_epsilon=exploration_final_epsilon,
-                decay_steps=exploration_decay_steps,
+                initial_epsilon=float(exploration_cfg["initial"]),
+                final_epsilon=float(exploration_cfg["final"]),
+                decay_steps=int(exploration_cfg["decay_steps"]),
             )
         )
-    if entropy_decay_steps > 0 and abs(entropy_final - entropy_initial) > 1e-9:
+
+    entropy_cfg = config.entropy
+    if (
+        entropy_cfg.get("decay_steps", 0) > 0
+        and abs(entropy_cfg["final"] - entropy_cfg["initial"]) > 1e-9
+    ):
         callbacks.append(
             EntropyCoefficientCallback(
-                initial_entropy=entropy_initial,
-                final_entropy=entropy_final,
-                decay_steps=entropy_decay_steps,
+                initial_entropy=float(entropy_cfg["initial"]),
+                final_entropy=float(entropy_cfg["final"]),
+                decay_steps=int(entropy_cfg["decay_steps"]),
             )
         )
-    if args.checkpoint_freq > 0:
-        save_freq = max(1, args.checkpoint_freq // max(1, args.num_envs))
-        checkpoint_callback = CheckpointCallback(
-            save_freq=save_freq,
-            save_path=str(log_dir),
-            name_prefix=f"{args.algo}_agent",
-            save_replay_buffer=False,
-            save_vecnormalize=False,
+
+    if config.checkpoint_freq > 0:
+        save_freq = max(1, config.checkpoint_freq // max(1, config.num_envs))
+        callbacks.append(
+            CheckpointCallback(
+                save_freq=save_freq,
+                save_path=str(config.log_dir),
+                name_prefix=f"{config.algo}_agent",
+                save_replay_buffer=False,
+                save_vecnormalize=False,
+            )
         )
-        callbacks.append(checkpoint_callback)
 
-    if episode_log_path:
-        callbacks.append(EpisodeLogCallback(episode_log_path))
+    if config.episode_log_path is not None:
+        callbacks.append(EpisodeLogCallback(config.episode_log_path))
 
-    model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None)
+    callbacks.append(
+        DiagnosticsLoggingCallback(log_interval=config.diagnostics_log_interval)
+    )
+
+    config_path = _save_config(config)
+    print(f"Saved run config to {config_path}")
+
+    model.learn(total_timesteps=config.total_timesteps, callback=callbacks)
 
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    model_path = log_dir / f"{args.algo}_agent_{timestamp}"
+    model_path = config.log_dir / f"{config.algo}_agent_{timestamp}"
     model.save(str(model_path))
     print(f"Saved trained model to {model_path.with_suffix('.zip')}")
 
