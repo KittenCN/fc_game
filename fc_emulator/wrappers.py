@@ -464,19 +464,38 @@ class VecTransposePixelsDictWrapper(VecEnvWrapper):
         self._height = height
         self._width = width
 
-    def _transpose(self, pixels: np.ndarray) -> np.ndarray:
+    def _transpose_batch(self, pixels: np.ndarray) -> np.ndarray:
         return np.transpose(pixels, (0, 3, 1, 2))
+
+    @staticmethod
+    def _transpose_single(pixels: np.ndarray) -> np.ndarray:
+        if pixels.ndim == 3:
+            return np.transpose(pixels, (2, 0, 1))
+        if pixels.ndim == 4:
+            return np.transpose(pixels, (0, 3, 1, 2))
+        raise ValueError("Unexpected pixels terminal observation shape")
 
     def reset(self) -> dict[str, np.ndarray]:
         obs = self.venv.reset()
         obs_dict = dict(obs)
-        obs_dict[self.key] = self._transpose(obs_dict[self.key])
+        obs_dict[self.key] = self._transpose_batch(obs_dict[self.key])
         return obs_dict
 
     def step_wait(self):
         obs, rewards, dones, infos = self.venv.step_wait()
         obs_dict = dict(obs)
-        obs_dict[self.key] = self._transpose(obs_dict[self.key])
+        obs_dict[self.key] = self._transpose_batch(obs_dict[self.key])
+        for info in infos:
+            terminal = info.get("terminal_observation")
+            if terminal is None:
+                continue
+            if isinstance(terminal, dict):
+                term_copy = dict(terminal)
+                if self.key in term_copy:
+                    term_copy[self.key] = self._transpose_single(term_copy[self.key])
+                info["terminal_observation"] = term_copy
+            else:
+                info["terminal_observation"] = self._transpose_single(terminal)
         return obs_dict, rewards, dones, infos
 
 
@@ -528,10 +547,19 @@ class VecFrameStackPixelsDictWrapper(VecEnvWrapper):
         obs, rewards, dones, infos = self.venv.step_wait()
         obs_dict = dict(obs)
         pixels = obs_dict[self.key]
+        prev_stacked = self.stacked_obs.copy()
         self._append(pixels)
         for idx, done in enumerate(dones):
-            if done:
-                self.stacked_obs[idx].fill(0)
-                self.stacked_obs[idx, -self.channels:] = pixels[idx]
+            if not done:
+                continue
+            term = infos[idx].get("terminal_observation")
+            if isinstance(term, dict):
+                term_copy = dict(term)
+            else:
+                term_copy = {}
+            term_copy[self.key] = prev_stacked[idx].copy()
+            infos[idx]["terminal_observation"] = term_copy
+            self.stacked_obs[idx].fill(0)
+            self.stacked_obs[idx, -self.channels:] = pixels[idx]
         obs_dict[self.key] = self.stacked_obs.copy()
         return obs_dict, rewards, dones, infos
