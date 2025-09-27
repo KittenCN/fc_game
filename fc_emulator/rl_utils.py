@@ -75,12 +75,22 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> tuple[tuple[
     short_jump_right = find_index(combo("A", "RIGHT"))
     ensure_sequence((run_right, run_right, run_jump_right, run_jump_right), sequences)
     ensure_sequence((run_right, short_jump_right, short_jump_right), sequences)
+    if run_right is not None and run_jump_right is not None:
+        ensure_sequence(tuple([run_right] * 3 + [run_jump_right] * 3), sequences)
+        ensure_sequence(tuple([run_right] * 5 + [run_jump_right] * 5), sequences)
+    if run_right is not None and short_jump_right is not None:
+        ensure_sequence(tuple([run_right] * 2 + [short_jump_right] * 3), sequences)
 
     run_left = first_valid(find_index(combo("B", "LEFT")), find_index(combo("LEFT")))
     run_jump_left = first_valid(find_index(combo("A", "B", "LEFT")), find_index(combo("A", "LEFT")))
     short_jump_left = find_index(combo("A", "LEFT"))
     ensure_sequence((run_left, run_left, run_jump_left, run_jump_left), sequences)
     ensure_sequence((run_left, short_jump_left, short_jump_left), sequences)
+    if run_left is not None and run_jump_left is not None:
+        ensure_sequence(tuple([run_left] * 3 + [run_jump_left] * 3), sequences)
+        ensure_sequence(tuple([run_left] * 5 + [run_jump_left] * 5), sequences)
+    if run_left is not None and short_jump_left is not None:
+        ensure_sequence(tuple([run_left] * 2 + [short_jump_left] * 3), sequences)
 
     neutral_jump = first_valid(find_index(combo("A")), short_jump_right, short_jump_left)
     if neutral_jump is not None:
@@ -89,6 +99,7 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> tuple[tuple[
     down = first_valid(find_index(combo("DOWN")), find_index(combo("RIGHT", "DOWN")))
     if down is not None:
         ensure_sequence((down, down, down, down), sequences)
+        ensure_sequence(tuple([down] * 8), sequences)
 
     return tuple(sequences)
 

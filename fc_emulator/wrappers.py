@@ -188,6 +188,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._stagnation_boost = max(0.0, float(stagnation_boost))
         self._stagnation_threshold = max(1, int(stagnation_threshold))
         self._macro_queue = deque()
+        self._macro_cooldown = 0
 
     def _current_stagnation(self) -> int:
         unwrapped = getattr(self.env, "unwrapped", self.env)
@@ -198,22 +199,43 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             return int(self.action_space.sample())
         if len(sequence) > 1:
             self._macro_queue.extend(sequence[1:])
+        self._macro_cooldown = max(self._macro_cooldown, len(sequence))
         return int(sequence[0])
 
     def action(self, action: int) -> int:  # type: ignore[override]
+        if self._macro_cooldown > 0:
+            self._macro_cooldown = max(0, self._macro_cooldown - 1)
+
         if self._macro_queue:
             return int(self._macro_queue.popleft())
 
         stagnation = self._current_stagnation()
+
+        if (
+            self._skill_sequences
+            and stagnation >= self._stagnation_threshold
+            and self._macro_cooldown == 0
+        ):
+            if stagnation >= self._stagnation_threshold * 2:
+                sequence_bias = 1.0
+            else:
+                sequence_bias = min(1.0, self._skill_bias + 0.15)
+            if self.np_random.random() < sequence_bias:
+                idx = int(self.np_random.integers(len(self._skill_sequences)))
+                sequence = self._skill_sequences[idx]
+                return self._queue_macro(sequence)
+
         effective_epsilon = self.epsilon
         if self.epsilon > 0.0 and stagnation >= self._stagnation_threshold and self._stagnation_boost > 0.0:
             ratio = stagnation / float(self._stagnation_threshold)
             effective_epsilon = min(1.0, self.epsilon + ratio * self._stagnation_boost)
+            if stagnation >= self._stagnation_threshold * 3:
+                effective_epsilon = 1.0
 
         if effective_epsilon <= 0.0 or self.np_random.random() >= effective_epsilon:
             return action
 
-        if self._skill_sequences and stagnation >= self._stagnation_threshold and self.np_random.random() < self._skill_bias:
+        if self._skill_sequences and self.np_random.random() < self._skill_bias:
             idx = int(self.np_random.integers(len(self._skill_sequences)))
             sequence = self._skill_sequences[idx]
             return self._queue_macro(sequence)
