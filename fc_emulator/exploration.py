@@ -67,6 +67,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._hotspot_sequence_bias = float(min(max(hotspot_sequence_bias, 0.0), 1.0))
         self._hotspot_history: deque[int] = deque()
         self._hotspot_counts: dict[int, int] = {}
+        self._hotspot_direction_map: dict[int, str] = {}
         self._active_hotspot: int | None = None
         self._hotspot_direction: str | None = None
         self._last_mario_x: int | None = None
@@ -76,13 +77,10 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
     def reset(self, **kwargs):  # type: ignore[override]
         self._macro_queue.clear()
         self._macro_cooldown = 0
-        self._hotspot_history.clear()
-        self._hotspot_counts.clear()
-        self._active_hotspot = None
-        self._hotspot_direction = None
         self._last_mario_x = None
         self._recent_direction = None
         self._last_action = None
+        self._refresh_hotspot_target()
         return super().reset(**kwargs)
 
     # Public API ---------------------------------------------------------
@@ -138,6 +136,12 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             return self._forward_sequences + self._neutral_sequences
         return self._skill_sequences
 
+    def _active_hotspot_intensity(self) -> float:
+        if self._active_hotspot is None or not self._hotspot_history:
+            return 0.0
+        count = self._hotspot_counts.get(self._active_hotspot, 0)
+        return count / float(len(self._hotspot_history))
+
     def _register_hotspot(self, position: int | None) -> None:
         if position is None:
             return
@@ -148,14 +152,47 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             if count is not None:
                 if count <= 1:
                     self._hotspot_counts.pop(removed, None)
+                    self._hotspot_direction_map.pop(removed, None)
                 else:
                     self._hotspot_counts[removed] = count - 1
         self._hotspot_history.append(bucket)
         self._hotspot_counts[bucket] = self._hotspot_counts.get(bucket, 0) + 1
         count = self._hotspot_counts[bucket]
         if count >= self._hotspot_threshold:
+            direction = self._recent_direction or "forward"
+            self._hotspot_direction_map[bucket] = direction
             self._active_hotspot = bucket
-            self._hotspot_direction = self._recent_direction or "forward"
+            self._hotspot_direction = direction
+        self._refresh_hotspot_target(prefer_existing=True)
+
+    def _refresh_hotspot_target(self, *, prefer_existing: bool = False) -> None:
+        if self._hotspot_counts:
+            if prefer_existing and self._active_hotspot is not None:
+                current_count = self._hotspot_counts.get(self._active_hotspot, 0)
+                if current_count >= self._hotspot_threshold:
+                    self._hotspot_direction = self._hotspot_direction_map.get(
+                        self._active_hotspot, self._hotspot_direction or self._recent_direction
+                    )
+                    return
+
+            best_bucket = None
+            best_count = 0
+            for bucket, count in self._hotspot_counts.items():
+                if count < self._hotspot_threshold:
+                    continue
+                if count > best_count or (count == best_count and bucket == self._active_hotspot):
+                    best_bucket = bucket
+                    best_count = count
+
+            if best_bucket is not None:
+                self._active_hotspot = best_bucket
+                self._hotspot_direction = self._hotspot_direction_map.get(
+                    best_bucket, self._recent_direction or "forward"
+                )
+                return
+
+        self._active_hotspot = None
+        self._hotspot_direction = None
 
     def _record_progress(self, info: dict) -> None:
         metrics = info.get("metrics") or {}
@@ -170,6 +207,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
                     ):
                         self._active_hotspot = None
                         self._hotspot_direction = None
+                        self._refresh_hotspot_target()
                 elif x_pos < self._last_mario_x:
                     self._recent_direction = "backward"
             self._last_mario_x = x_pos
@@ -193,6 +231,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
 
         stagnation = self._current_stagnation()
         prioritized = self._get_priority_sequences()
+        hotspot_intensity = self._active_hotspot_intensity()
         if prioritized and self._macro_cooldown == 0:
             threshold = max(1, self._stagnation_threshold // 3)
             if stagnation >= threshold:
@@ -200,6 +239,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
                 if self._active_hotspot is not None:
                     ratio = min(1.0, stagnation / float(max(1, self._stagnation_threshold)))
                     bias = max(bias, self._hotspot_sequence_bias * ratio)
+                    if hotspot_intensity >= 0.3:
+                        bias = max(bias, min(1.0, 0.85 + hotspot_intensity / 2.0))
                 if self.np_random.random() < bias:
                     sequence = self._select_sequence(prioritized)
                     if sequence:
@@ -215,6 +256,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
                 sequence_bias = 1.0
             if self._active_hotspot is not None:
                 sequence_bias = max(sequence_bias, self._hotspot_sequence_bias)
+                if hotspot_intensity >= 0.3:
+                    sequence_bias = 1.0
             if self.np_random.random() < sequence_bias:
                 sequence = self._select_sequence(self._skill_sequences)
                 if sequence:
@@ -230,6 +273,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             effective_epsilon = min(1.0, self.epsilon + ratio * self._stagnation_boost)
             if stagnation >= self._stagnation_threshold * 3:
                 effective_epsilon = 1.0
+            elif hotspot_intensity >= 0.4:
+                effective_epsilon = min(1.0, effective_epsilon + hotspot_intensity * 0.5)
 
         if effective_epsilon <= 0.0 or self.np_random.random() >= effective_epsilon:
             self._last_action = int(action)
