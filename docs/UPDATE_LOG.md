@@ -155,8 +155,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 ##### 建议命令
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
-  --algo ppo --policy-preset mario_large \
-  --total-timesteps 600000 --num-envs 12 --vec-env subproc \
+  --algo ppo --policy-preset baseline \
+  --total-timesteps 1200000 --num-envs 8 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
   --stagnation-frames 760 --stagnation-progress 1 \
@@ -165,7 +165,6 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --max-episode-steps 3200 \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
-  --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
   --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 30 --best-patience 6 --best-min-improve 1.0 \
   --episode-log episode_log_eval3.jsonl

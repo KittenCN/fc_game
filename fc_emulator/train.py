@@ -465,7 +465,11 @@ def main() -> None:
         default=32,
         help="Bucket size (in mario_x) when aggregating hotspot diagnostics (default: 32).",
     )
-    parser.add_argument("--tensorboard", action="store_true", help="Enable TensorBoard logging")
+    parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="Enable TensorBoard logging (disabled by default)",
+    )
     parser.add_argument(
         "--episode-log",
         default="episode_log.jsonl",

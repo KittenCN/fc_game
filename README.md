@@ -46,7 +46,7 @@ python -m fc_emulator.cli --rom roms/SuperMarioBros.nes
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --algo ppo --total-timesteps 1000000 --num-envs 6 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --reward-profile smb_progress \
-  --observation-type gray --tensorboard --diagnostics-log-interval 2000
+  --observation-type gray --diagnostics-log-interval 2000
 ```
 常用参数：
 - `--observation-type`：`rgb` / `gray` / `ram` / `rgb_ram` / `gray_ram`
@@ -89,8 +89,8 @@ python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
 
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
-  --algo ppo --policy-preset mario_large \
-  --total-timesteps 8000000 --num-envs 30 --vec-env subproc \
+  --algo ppo --policy-preset baseline \
+  --total-timesteps 1200000 --num-envs 8 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
   --stagnation-frames 720 --stagnation-progress 1 \
@@ -98,8 +98,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --stagnation-backtrack-penalty 1.5 \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
-  --icm --icm-eta 0.015 --icm-lr 5e-5 \
-  --checkpoint-freq 1000000 --diagnostics-log-interval 2000 \
+  --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
+  --best-checkpoint best_agent.zip --best-window 30 --best-patience 6 \
   --episode-log episode_log.jsonl
 ```
 
