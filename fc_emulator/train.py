@@ -154,6 +154,7 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         algo_kwargs["n_steps"] = args.n_steps
     if args.batch_size:
         algo_kwargs["batch_size"] = args.batch_size
+    algo_kwargs.setdefault("normalize_advantage", True)
 
     entropy_initial = args.entropy_coef if args.entropy_coef is not None else algo_kwargs.get("ent_coef")
     if entropy_initial is None:
@@ -350,13 +351,13 @@ def main() -> None:
     parser.add_argument(
         "--best-window",
         type=int,
-        default=20,
+        default=30,
         help="Number of episodes per evaluation window when tracking best model.",
     )
     parser.add_argument(
         "--best-patience",
         type=int,
-        default=5,
+        default=6,
         help="Number of windows without improvement before reloading the best checkpoint.",
     )
     parser.add_argument(

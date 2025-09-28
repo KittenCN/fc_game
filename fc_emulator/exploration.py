@@ -78,6 +78,9 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._rescue_cooldown = 0
         self._rescue_cooldown_max = max(0, int(rescue_cooldown))
         self._rescue_hits = max(1, int(rescue_hits))
+        self._base_epsilon = self.epsilon
+        self._epsilon_boost = 0.0
+        self._epsilon_boost_steps = 0
 
     def reset(self, **kwargs):  # type: ignore[override]
         self._macro_queue.clear()
@@ -87,11 +90,14 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._last_action = None
         self._refresh_hotspot_target()
         self._rescue_cooldown = 0
+        self._epsilon_boost = 0.0
+        self._epsilon_boost_steps = 0
         return super().reset(**kwargs)
 
     # Public API ---------------------------------------------------------
     def set_exploration_epsilon(self, epsilon: float) -> None:
         self.epsilon = max(0.0, float(epsilon))
+        self._base_epsilon = self.epsilon
 
     def set_skill_actions(self, actions: tuple[int, ...], *, bias: float | None = None) -> None:
         self._skill_actions = tuple(actions)
@@ -238,6 +244,10 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             and self._rescue_cooldown == 0
         ):
             self._trigger_rescue()
+        if self._epsilon_boost_steps > 0:
+            self._epsilon_boost_steps = max(0, self._epsilon_boost_steps - 1)
+            if self._epsilon_boost_steps == 0:
+                self._epsilon_boost = 0.0
 
     # Gym overrides ------------------------------------------------------
     def step(self, action):  # type: ignore[override]
@@ -291,6 +301,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
                     return self._queue_macro(sequence)
 
         effective_epsilon = self.epsilon
+        if self._epsilon_boost > 0.0:
+            effective_epsilon = min(1.0, effective_epsilon + self._epsilon_boost)
         if (
             self.epsilon > 0.0
             and stagnation >= self._stagnation_threshold
@@ -333,6 +345,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
             self._queue_macro(sequence)
             self._rescue_cooldown = self._rescue_cooldown_max or len(sequence)
             self._recent_direction = "forward"
+            self._epsilon_boost = max(self._epsilon_boost, 0.1)
+            self._epsilon_boost_steps = self._rescue_cooldown
 
 
 __all__ = [

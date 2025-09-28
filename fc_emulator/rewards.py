@@ -35,7 +35,7 @@ def make_super_mario_progress_reward(
     *,
     progress_scale: float = 0.05,
     backward_penalty: float = 0.1,
-    time_penalty: float = 0.006,
+    time_penalty: float = 0.003,
     death_penalty: float = -25.0,
     score_scale: float = 0.01,
     stagnation_penalty: float = 10.0,
@@ -47,7 +47,8 @@ def make_super_mario_progress_reward(
     powerup_bonus: float = 15.0,
     forward_hold_bonus: float = 0.2,
     forward_hold_threshold: int = 18,
-    backtrack_streak_penalty: float = 0.3,
+    backtrack_streak_penalty: float = 0.2,
+    reward_scale: float = 0.1,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -185,6 +186,8 @@ def make_super_mario_progress_reward(
             - backtrack_penalty_value
         )
 
+        shaped_reward *= reward_scale
+
         if context.info.get("stagnation_truncated"):
             bucket = metrics.get("stagnation_bucket")
             penalty_scale = 1.0
@@ -199,6 +202,7 @@ def make_super_mario_progress_reward(
         diagnostics = context.info.setdefault("diagnostics", {})
         diagnostics["forward_streak"] = int(state.get("forward_streak", 0))
         diagnostics["backtrack_streak"] = int(state.get("backtrack_streak", 0))
+        diagnostics["reward_scale"] = float(reward_scale)
 
         return shaped_reward
 

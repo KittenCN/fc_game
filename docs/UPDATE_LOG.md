@@ -167,6 +167,22 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
-  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 20 --best-patience 5 --best-min-improve 1.0 \
+  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 30 --best-patience 6 --best-min-improve 1.0 \
   --episode-log episode_log_eval3.jsonl --tensorboard
 ```
+
+### 2025-09-29 凌晨（最优回滚 + 奖励调节）
+
+#### 发现的问题
+- 60 万步实验 `episode_log_eval3.jsonl` 中，`mario_x` 均值虽提升至约 206，但 `stagnation` 占 99%，`backtrack` 警告仍占 26%，shaped reward 均值约 -2182，说明前进能力有所增强但奖励信号仍高度偏负，回退频繁。
+
+#### 采取的方案
+- 引入 `BestModelCheckpointCallback`，以窗口平均 `mario_x` 追踪并保存最优模型，在连续 `patience` 个窗口无改进时自动回滚继续训练。
+- 调整奖励函数：时间罚项降至 0.003，回退连击惩罚降至 0.2，并新增统一 `reward_scale=0.1`，保持正向奖励与惩罚平衡。
+- 强化探索救援：救援触发后暂时提高 ε 并重置冷却，增加打破热点滞留的几率。
+- 默认为 PPO 开启 `normalize_advantage`，最佳模型窗口/耐心改为 30/6。
+- 受影响文件：`train.py`、`callbacks.py`、`exploration.py`、`rewards.py`、`README.md`。
+
+#### 下一步计划
+- 使用上述命令重新训练，重点监控：`backtrack_warning` 比例、`mario_x` 分位、shaped reward 分布以及最优回滚触发频次。
+- 若回退仍高，可继续缩短救援冷却或引入阶段性停滞阈值/里程碑奖励。
