@@ -18,9 +18,8 @@ class StagnationConfig:
     hotspot_bucket: int = 32
     idle_limit_multiplier: float = 1.1
     score_relief_cap_ratio: float = 0.45
-    backtrack_penalty_scale: float = 1.0
-    backtrack_stop_ratio: float = 0.7
-    backtrack_stop_min_progress: int = 128
+    backtrack_penalty_scale: float = 1.5
+    backtrack_alert_hits: int = 2
 
 
 @dataclass
@@ -34,6 +33,7 @@ class StagnationStatus:
     position: int | None
     bucket: int | None
     idle_counter: int | None
+    backtrack_hits: int
 
 
 class StagnationMonitor:
@@ -130,6 +130,7 @@ class StagnationMonitor:
                 position=current_x,
                 bucket=self._bucketise(current_x),
                 idle_counter=None,
+                backtrack_hits=0,
             )
 
         reason = "no_progress"
@@ -154,6 +155,7 @@ class StagnationMonitor:
                 position=current_x,
                 bucket=self._bucketise(current_x),
                 idle_counter=self._idle_counter,
+                backtrack_hits=self._recent_backtrack_hits,
             )
 
         delta_x = current_x - self._last_progress_x
@@ -275,29 +277,7 @@ class StagnationMonitor:
                 int(self._limit * max(1.0, self.config.idle_limit_multiplier)),
             )
 
-        forced_backtrack = False
-        backtrack_ratio = max(0.0, min(1.0, self.config.backtrack_stop_ratio))
-        min_progress = max(0, int(self.config.backtrack_stop_min_progress))
-        if (
-            backtrack_ratio > 0.0
-            and self._max_progress_x >= max(min_progress, self.config.progress_threshold)
-            and current_x < int(self._max_progress_x * backtrack_ratio)
-            and self._max_progress_x - current_x >= max(1, self.config.progress_threshold)
-        ):
-            forced_backtrack = True
-            reason = "backtrack"
-            event = "backtrack_stop"
-
-        if forced_backtrack:
-            triggered = True
-            frames = self._counter or frame_skip
-            self._counter = 0
-            self._idle_counter = 0
-            self._last_progress_x = current_x
-            trigger_reason = "backtrack"
-            self._recent_backtrack_hits = 0
-            self._recent_backtrack_bucket = None
-        elif self._limit is not None and self._counter >= self._limit:
+        if self._limit is not None and self._counter >= self._limit:
             triggered = True
             frames = self._counter
             self._counter = 0
@@ -326,6 +306,10 @@ class StagnationMonitor:
                 if self._recent_backtrack_hits == 0:
                     self._recent_backtrack_bucket = None
 
+        alert_hits = max(1, int(self.config.backtrack_alert_hits))
+        if not triggered and self._recent_backtrack_hits >= alert_hits:
+            event = event or "backtrack_warning"
+
         if reset_budget:
             self._limit = self._compute_limit()
             self._score_relief_budget = self._score_budget_from_limit(self._limit)
@@ -343,6 +327,7 @@ class StagnationMonitor:
             position=current_x,
             bucket=self._bucketise(current_x),
             idle_counter=idle_counter_value,
+            backtrack_hits=self._recent_backtrack_hits,
         )
 
 

@@ -200,7 +200,7 @@ class ExplorationEpsilonCallback(BaseCallback):
         self._boost_steps_remaining = 0
         self._repeat_bucket: int | None = None
         self._repeat_count = 0
-        self._boost_events = {"stagnation", "backtrack", "no_progress", "backtrack_stop", "score_loop"}
+        self._boost_events = {"stagnation", "backtrack", "no_progress", "backtrack_warning", "score_loop"}
         self._boost_reasons = {"stagnation", "backtrack", "no_progress", "score_loop"}
 
     def _on_training_start(self) -> None:

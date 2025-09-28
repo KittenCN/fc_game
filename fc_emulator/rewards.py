@@ -45,6 +45,9 @@ def make_super_mario_progress_reward(
     stagnation_escape_bonus: float = 12.0,
     micro_progress_bonus: float = 0.3,
     powerup_bonus: float = 15.0,
+    forward_hold_bonus: float = 0.2,
+    forward_hold_threshold: int = 18,
+    backtrack_streak_penalty: float = 0.3,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -56,6 +59,8 @@ def make_super_mario_progress_reward(
         "stagnation_steps": 0,
         "prev_player_state": None,
         "milestones": set(),
+        "forward_streak": 0,
+        "backtrack_streak": 0,
     }
 
     def on_reset() -> None:
@@ -66,6 +71,8 @@ def make_super_mario_progress_reward(
         state["stagnation_steps"] = 0
         state["prev_player_state"] = None
         state["milestones"] = set()
+        state["forward_streak"] = 0
+        state["backtrack_streak"] = 0
 
     def shaper(context: RewardContext) -> float:
         metrics = context.info.get("metrics", {})
@@ -78,6 +85,8 @@ def make_super_mario_progress_reward(
         progress_bonus = 0.0
         micro_progress_value = 0.0
         escape_bonus_value = 0.0
+        forward_hold_reward = 0.0
+        backtrack_penalty_value = 0.0
         prev_stagnation = int(state.get("stagnation_steps", 0))
         if state["prev_x"] is not None:
             delta_x = x_pos - int(state["prev_x"])
@@ -92,11 +101,28 @@ def make_super_mario_progress_reward(
                     escape_scale = 1.0 + min(delta_x, 4) / 4.0
                     escape_bonus_value = stagnation_escape_bonus * escape_scale
                 state["stagnation_steps"] = 0
+                state["forward_streak"] = min(
+                    forward_hold_threshold,
+                    int(state.get("forward_streak", 0)) + int(delta_x),
+                )
+                if state["forward_streak"] >= forward_hold_threshold:
+                    forward_hold_reward = forward_hold_bonus
+                state["backtrack_streak"] = max(
+                    0,
+                    int(state.get("backtrack_streak", 0)) - int(delta_x),
+                )
             else:
                 state["stagnation_steps"] = prev_stagnation + 1
+                state["forward_streak"] = max(0, int(state.get("forward_streak", 0)) - 1)
+                state["backtrack_streak"] = int(state.get("backtrack_streak", 0)) + abs(delta_x)
         else:
             state["stagnation_steps"] = 0
+            state["forward_streak"] = 0
+            state["backtrack_streak"] = 0
         state["prev_x"] = x_pos
+
+        if state["backtrack_streak"]:
+            backtrack_penalty_value = min(32, int(state["backtrack_streak"])) * backtrack_streak_penalty
 
         milestone_bonus = 0.0
         best_x = int(state.get("best_x", 0))
@@ -154,7 +180,9 @@ def make_super_mario_progress_reward(
             + micro_progress_value
             + escape_bonus_value
             + powerup_reward
+            + forward_hold_reward
             + milestone_reward
+            - backtrack_penalty_value
         )
 
         if context.info.get("stagnation_truncated"):
@@ -167,6 +195,10 @@ def make_super_mario_progress_reward(
 
         if context.done and context.base_reward <= 0:
             shaped_reward += death_penalty
+
+        diagnostics = context.info.setdefault("diagnostics", {})
+        diagnostics["forward_streak"] = int(state.get("forward_streak", 0))
+        diagnostics["backtrack_streak"] = int(state.get("backtrack_streak", 0))
 
         return shaped_reward
 

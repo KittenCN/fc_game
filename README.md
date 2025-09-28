@@ -94,6 +94,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
   --stagnation-frames 720 --stagnation-progress 1 \
+  --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
+  --stagnation-backtrack-penalty 1.5 \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \

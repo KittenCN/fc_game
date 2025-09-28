@@ -66,9 +66,8 @@ class NESGymEnv(gym.Env):
         stagnation_progress_threshold: int = 1,
         stagnation_bonus_scale: float = 0.15,
         stagnation_idle_multiplier: float = 1.1,
-        stagnation_backtrack_penalty_scale: float = 1.0,
-        stagnation_backtrack_stop_ratio: float = 0.7,
-        stagnation_backtrack_stop_min_progress: int = 128,
+        stagnation_backtrack_penalty_scale: float = 1.5,
+        stagnation_backtrack_alert_hits: int = 2,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
@@ -99,8 +98,7 @@ class NESGymEnv(gym.Env):
                 bonus_scale=float(stagnation_bonus_scale),
                 idle_limit_multiplier=float(stagnation_idle_multiplier),
                 backtrack_penalty_scale=float(stagnation_backtrack_penalty_scale),
-                backtrack_stop_ratio=float(stagnation_backtrack_stop_ratio),
-                backtrack_stop_min_progress=int(stagnation_backtrack_stop_min_progress),
+                backtrack_alert_hits=int(stagnation_backtrack_alert_hits),
             )
         )
 
@@ -187,6 +185,8 @@ class NESGymEnv(gym.Env):
         if status.idle_counter is not None:
             diagnostics["stagnation_idle_frames"] = int(status.idle_counter)
             metrics_entry["stagnation_idle_frames"] = int(status.idle_counter)
+        diagnostics["backtrack_hits"] = int(status.backtrack_hits)
+        metrics_entry["backtrack_hits"] = int(status.backtrack_hits)
         if status.frames is not None:
             merged_info["stagnation_frames"] = status.frames
             diagnostics["stagnation_frames"] = status.frames

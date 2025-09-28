@@ -128,3 +128,42 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 #### 下一步计划
 - 在新逻辑下继续 400k~500k timestep 训练以观察热点扩散与 ≥512 样本占比变化（参数见下）。
 - 关注 `docs/UPDATE_LOG.md` 中 `stagnation_event='backtrack_stop'` 的占比，确认是否显著下降。
+
+### 2025-09-28 深夜（40 万步延长实验）
+
+#### 发现的问题
+- 40 万步运行（`episode_log_eval2.jsonl`，1781 回合）平均 `mario_x` 仅 22.6、最高 1168，≥512 桶占比 0.9%，整体前进显著退化。
+- `stagnation_event='backtrack_stop'` 触发 997 次（56%），热点统计显示 `bucket=0` 占 91.5%，说明代理频繁返回出生点并被强制截断。
+- `stagnation_frames` 均值 349、`stagnation_idle_frames` ≈ 611，回合在短暂进度后迅速回落，ε 提升不足以带来突破。
+
+#### 分析与原因
+- `backtrack_stop_min_progress=128` 仍过低，刚突破初期即会遭到强制截断，导致长程样本难以积累。
+- 强制回退在第一次出现时即生效，缺乏再尝试机会，与高频回落叠加造成大量短回合。
+
+#### 采取的方案
+- 移除强制回退截断逻辑，改为根据回退次数发出 `backtrack_warning`，仅向探索与奖励提供信号。
+- 将回退进度阈值提升至 256，并要求同一热点连续两次回退才触发警告；`backtrack_penalty_scale` 提升至 1.5。
+- 在奖励塑形中加入“前进保持奖励”与“回退连击惩罚”，鼓励持续向前、抑制频繁回头。
+- 受影响文件：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`train.py`、`rewards.py`、`callbacks.py`。
+
+#### 下一步计划
+- 继续进行 600k timestep 训练，验证 `backtrack_warning` 占比是否下降、≥512 桶样本是否回升（命令见下）。
+- 重点监控：`bucket=0` 次数、`mario_x` 均值/分位数、`stagnation_reason` 分布以及 ε 提升触发频率。
+
+##### 建议命令
+```bash
+python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
+  --algo ppo --policy-preset mario_large \
+  --total-timesteps 600000 --num-envs 12 --vec-env subproc \
+  --frame-skip 4 --frame-stack 4 --resize 84 84 \
+  --reward-profile smb_progress --observation-type gray \
+  --stagnation-frames 760 --stagnation-progress 1 \
+  --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
+  --stagnation-backtrack-penalty 1.5 \
+  --max-episode-steps 3200 \
+  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
+  --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
+  --icm --icm-eta 0.015 --icm-lr 5e-5 \
+  --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
+  --episode-log episode_log_eval3.jsonl --tensorboard
+```
