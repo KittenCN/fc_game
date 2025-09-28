@@ -124,3 +124,34 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - `checkpoint-freq=1000000` 与频率更高的诊断刷新（2000）确保能观察热点分布与 `stagnation_reason` 变化并及时回滚。
 
 欢迎通过 Issue / PR 反馈需求，共同完善 FC Emulator Toolkit。
+
+## 更新记录（2025-09-28）
+
+### 发现的问题
+- `runs/episode_log.jsonl` 共 3154 回合，其中 3126 次因停滞提前结束，`stagnation_event='backtrack'` 占比 61.7%，热点集中在 `0~96` 桶。
+- 停滞回合后热点方向被标记为 `backward`，导致宏动作探索持续注入后退序列，代理在出生点反复徘徊。
+
+### 分析与原因
+- `EpsilonRandomActionWrapper` 依据最近位移方向更新 `_hotspot_direction_map`；停滞触发时 `mario_x` 回落，使 `_recent_direction` 变为 `backward`。
+- 热点方向错误地指向 `backward`，`_get_priority_sequences` 优先采样后退宏序列，加剧了停滞与回退事件。
+
+### 采取的方案
+- 代码变更摘要：
+  - 文件/模块：`fc_emulator/exploration.py`
+  - 关键改动：新增 `_determine_hotspot_direction`，在停滞/回退事件下强制热点方向指向 `forward`，避免重复注入后退宏动作。
+- 运行命令与参数：
+  ```bash
+  python -m compileall fc_emulator/exploration.py
+  # 语法检查已通过；后续需重新运行训练脚本评估效果
+  ```
+
+### 实验与结果
+- 数据集/切分：暂未重新训练，等待新一轮 PPO 运行验证热点分布与 `mario_x` 长度尾部。
+- 指标（基线 vs 新方案）：预计需对比停滞终止占比、`stagnation_event` 方向分布与 `mario_x` 95% 分位数。
+- 资源占用与耗时：待后续实验记录。
+- 结论：已消除热点方向反馈的显性缺陷，需通过短程回归实验确认探索质量改善幅度。
+
+### 后续计划
+- 进行 ≥200k timestep 的短程 PPO 训练，观察热点方向分布与 `backtrack` 事件占比（负责人：开放）。
+- 若回退仍占主导，考虑在 `MacroSequenceLibrary` 中拆分中立序列或调整停滞阈值以匹配新策略（优先级：中）。
+- 更新 `fc_emulator.analysis`，增加按时间片展示热点方向的能力（优先级：低）。

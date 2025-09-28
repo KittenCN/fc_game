@@ -142,7 +142,18 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         count = self._hotspot_counts.get(self._active_hotspot, 0)
         return count / float(len(self._hotspot_history))
 
-    def _register_hotspot(self, position: int | None) -> None:
+    def _determine_hotspot_direction(self, event: str | None) -> str:
+        if event in {"backtrack", "stagnation", "no_progress", "score_loop"}:
+            return "forward"
+        if event in {"forward_progress", "level_transition", "powerup"}:
+            return "forward"
+        if self._recent_direction in {"forward", "backward"}:
+            return self._recent_direction
+        if self._hotspot_direction in {"forward", "backward"}:
+            return self._hotspot_direction
+        return "forward"
+
+    def _register_hotspot(self, position: int | None, *, event: str | None = None) -> None:
         if position is None:
             return
         bucket = (position // self._hotspot_bucket) * self._hotspot_bucket
@@ -159,7 +170,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._hotspot_counts[bucket] = self._hotspot_counts.get(bucket, 0) + 1
         count = self._hotspot_counts[bucket]
         if count >= self._hotspot_threshold:
-            direction = self._recent_direction or "forward"
+            direction = self._determine_hotspot_direction(event)
             self._hotspot_direction_map[bucket] = direction
             self._active_hotspot = bucket
             self._hotspot_direction = direction
@@ -212,7 +223,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
                     self._recent_direction = "backward"
             self._last_mario_x = x_pos
         if info.get("stagnation_truncated"):
-            self._register_hotspot(x_pos)
+            event = metrics.get("stagnation_event") or info.get("stagnation_event")
+            self._register_hotspot(x_pos, event=event)
 
     # Gym overrides ------------------------------------------------------
     def step(self, action):  # type: ignore[override]
