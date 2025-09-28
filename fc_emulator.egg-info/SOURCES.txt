@@ -2,12 +2,14 @@ README.md
 pyproject.toml
 fc_emulator/__init__.py
 fc_emulator/__main__.py
+fc_emulator/analysis.py
 fc_emulator/bus.py
 fc_emulator/callbacks.py
 fc_emulator/cli.py
 fc_emulator/compat.py
 fc_emulator/controller.py
 fc_emulator/emulator.py
+fc_emulator/icm.py
 fc_emulator/infer.py
 fc_emulator/policies.py
 fc_emulator/renderer.py
