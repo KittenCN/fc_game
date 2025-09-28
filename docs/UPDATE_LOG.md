@@ -156,9 +156,11 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --algo ppo --policy-preset baseline \
-  --total-timesteps 1200000 --num-envs 8 --vec-env subproc \
+  --total-timesteps 1200000 --num-envs 6 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
+  --n-steps 1024 --batch-size 256 \
+  --icm --icm-eta 0.015 --icm-lr 5e-5 --icm-feature-dim 128 --icm-hidden-dim 128 \
   --stagnation-frames 760 --stagnation-progress 1 \
   --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
   --stagnation-backtrack-penalty 1.5 \

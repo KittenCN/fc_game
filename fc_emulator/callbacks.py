@@ -50,7 +50,6 @@ class BestModelCheckpointCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos") or []
-        updated = False
         for info in infos:
             episode = info.get("episode")
             if not episode:
@@ -63,10 +62,22 @@ class BestModelCheckpointCallback(BaseCallback):
                 metric_value = float(value)
             except (TypeError, ValueError):
                 continue
-            self._recent_metrics.append(metric_value)
-            updated = True
+            if not self._consider_metric(metric_value):
+                return False
+        return True
 
-        if not updated or len(self._recent_metrics) < self.window:
+    def consider_metric(self, value: float) -> None:
+        self._consider_metric(value, force_window=True)
+
+    def _consider_metric(self, value: float, force_window: bool = False) -> bool:
+        if force_window:
+            self._recent_metrics.clear()
+            for _ in range(self.window):
+                self._recent_metrics.append(value)
+        else:
+            self._recent_metrics.append(value)
+
+        if len(self._recent_metrics) < self.window:
             return True
 
         if self.mode == "mean":
@@ -90,6 +101,7 @@ class BestModelCheckpointCallback(BaseCallback):
         if self._no_improve_windows >= self.patience:
             self.should_reload_best = True
             self._no_improve_windows = 0
+            self._recent_metrics.clear()
             return False
 
         return True

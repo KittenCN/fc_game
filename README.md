@@ -90,22 +90,24 @@ python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --algo ppo --policy-preset baseline \
-  --total-timesteps 1200000 --num-envs 8 --vec-env subproc \
+  --total-timesteps 1200000 --num-envs 6 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
+  --n-steps 1024 --batch-size 256 \
+  --icm --icm-eta 0.015 --icm-lr 5e-5 --icm-feature-dim 128 --icm-hidden-dim 128 \
   --stagnation-frames 720 --stagnation-progress 1 \
   --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
   --stagnation-backtrack-penalty 1.5 \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
-  --best-checkpoint best_agent.zip --best-window 30 --best-patience 6 \
+  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-metric-mode max --best-window 30 --best-patience 6 --best-min-improve 1.0 \
   --episode-log episode_log.jsonl
 ```
 
 推荐理由：
-- `num_envs=30` 精准匹配 vCPU 数，避免 32 并发造成的上下文切换开销，并确保每步 rollout 都能及时回传热点统计。
-- `resize 84 84` 为更深的 `MarioFeatureExtractor` 提供充足信息量，同时在 11GB 显存下仍能容纳 12 并行环境与 ICM。
+- `num_envs=6` + `n_steps=1024` 可大幅降低 rollout buffer 的显存占用，同时保持合理的样本吞吐。
+- `icm-feature-dim=128` / `icm-hidden-dim=128` 让 ICM 仍然生效但计算显存压力更低。
 - `exploration` / `entropy` 衰减延长至 300 万步，利用热点持久化策略逐步降低随机性但保留宏动作注入窗口。
 - `stagnation-frames=720` 搭配持久化热点与 `score_loop` 监测，让宏动作有尝试空间同时快速截断刷分循环。
 - `checkpoint-freq=1000000` 与频率更高的诊断刷新（2000）确保能观察热点分布与 `stagnation_reason` 变化并及时回滚。

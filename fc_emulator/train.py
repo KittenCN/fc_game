@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
+
 try:  # pragma: no cover - optional dependency
     from stable_baselines3.common.callbacks import CheckpointCallback
 except ImportError as exc:  # pragma: no cover - user guidance
@@ -73,6 +75,8 @@ class TrainingConfig:
     best_window: int = 20
     best_patience: int = 5
     best_min_improvement: float = 1.0
+    eval_interval: int = 0
+    eval_episodes: int = 5
     exploration: dict[str, Any] = field(default_factory=dict)
     exploration_env_initial: float = 0.0
     entropy: dict[str, Any] = field(default_factory=dict)
@@ -221,6 +225,8 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         best_window=int(args.best_window),
         best_patience=int(args.best_patience),
         best_min_improvement=float(args.best_min_improve),
+        eval_interval=max(0, int(args.eval_interval)),
+        eval_episodes=max(1, int(args.eval_episodes)),
         exploration={
             "initial": exploration_initial,
             "final": exploration_final,
@@ -254,6 +260,59 @@ def _save_config(config: TrainingConfig) -> Path:
     with path.open("w", encoding="utf-8") as fp:
         json.dump(config.to_json_dict(), fp, ensure_ascii=False, indent=2)
     return path
+
+
+def _evaluate_progress(model, config: TrainingConfig) -> tuple[float, float]:
+    if config.eval_interval <= 0:
+        return 0.0, 0.0
+
+    eval_env = make_vector_env(
+        str(config.rom),
+        frame_skip=config.frame_skip,
+        observation_type=config.observation_type,
+        action_set=config.action_set,
+        max_episode_steps=config.max_episode_steps,
+        n_envs=1,
+        seed=config.seed,
+        resize_shape=config.resize,
+        vec_env_type="dummy",
+        reward_config_factory=None,
+        auto_start=config.auto_start,
+        auto_start_max_frames=config.auto_start_max_frames,
+        auto_start_press_frames=config.auto_start_press_frames,
+        exploration_epsilon=0.0,
+        stagnation_max_frames=config.stagnation_max_frames,
+        stagnation_progress_threshold=config.stagnation_progress_threshold,
+        stagnation_bonus_scale=config.stagnation_bonus_scale,
+        stagnation_idle_multiplier=config.stagnation_idle_multiplier,
+        stagnation_backtrack_penalty_scale=config.stagnation_backtrack_penalty_scale,
+        stagnation_backtrack_alert_hits=config.stagnation_backtrack_alert_hits,
+        frame_stack=config.frame_stack,
+        use_icm=False,
+    )
+
+    mario_x_values: list[float] = []
+    episodes_run = 0
+    obs = eval_env.reset()
+    while episodes_run < config.eval_episodes:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, rewards, dones, infos = eval_env.step(action)
+        if dones[0]:
+            info = infos[0] if infos else {}
+            metrics = info.get("metrics") or {}
+            mario_x_values.append(float(metrics.get("mario_x", 0.0)))
+            episodes_run += 1
+            obs = eval_env.reset()
+
+    eval_env.close()
+
+    if mario_x_values:
+        mean_val = float(np.mean(mario_x_values))
+        max_val = float(np.max(mario_x_values))
+    else:
+        mean_val = 0.0
+        max_val = 0.0
+    return mean_val, max_val
 
 
 def main() -> None:
@@ -474,6 +533,18 @@ def main() -> None:
         help="Bucket size (in mario_x) when aggregating hotspot diagnostics (default: 32).",
     )
     parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=200_000,
+        help="Timesteps between deterministic evaluation sweeps (0 disables).",
+    )
+    parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=5,
+        help="Number of episodes per evaluation sweep when eval-interval>0.",
+    )
+    parser.add_argument(
         "--tensorboard",
         action="store_true",
         help="Enable TensorBoard logging (disabled by default)",
@@ -607,6 +678,7 @@ def main() -> None:
 
     total_trained = 0
     chunk_size = config.checkpoint_freq if config.checkpoint_freq > 0 else config.total_timesteps
+    next_eval = config.eval_interval if config.eval_interval > 0 else None
 
     while total_trained < config.total_timesteps:
         remaining = config.total_timesteps - total_trained
@@ -616,6 +688,19 @@ def main() -> None:
         after_steps = model.num_timesteps
         actual_chunk = max(0, after_steps - before_steps)
         total_trained += actual_chunk
+
+        if (
+            best_checkpoint_callback
+            and next_eval is not None
+            and total_trained >= next_eval
+        ):
+            mean_eval, max_eval = _evaluate_progress(model, config)
+            metric_to_track = max_eval if config.best_metric_mode == "max" else mean_eval
+            print(
+                f"Evaluation at {total_trained} steps: mean mario_x={mean_eval:.2f}, max mario_x={max_eval:.2f}"
+            )
+            best_checkpoint_callback.consider_metric(metric_to_track)
+            next_eval += config.eval_interval
 
         if best_checkpoint_callback and best_checkpoint_callback.should_reload_best:
             best_checkpoint_callback.reset_trigger()
