@@ -168,7 +168,7 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
   --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 30 --best-patience 6 --best-min-improve 1.0 \
-  --episode-log episode_log_eval3.jsonl --tensorboard
+  --episode-log episode_log_eval3.jsonl
 ```
 
 ### 2025-09-29 凌晨（最优回滚 + 奖励调节）

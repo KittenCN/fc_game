@@ -100,7 +100,7 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 1000000 --diagnostics-log-interval 2000 \
-  --episode-log episode_log.jsonl --tensorboard
+  --episode-log episode_log.jsonl
 ```
 
 推荐理由：
