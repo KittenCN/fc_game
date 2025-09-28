@@ -166,7 +166,7 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
-  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 30 --best-patience 6 --best-min-improve 1.0 \
+  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-metric-mode max --best-window 30 --best-patience 6 --best-min-improve 1.0 \
   --episode-log episode_log_eval3.jsonl
 ```
 

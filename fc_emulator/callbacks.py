@@ -20,6 +20,7 @@ class BestModelCheckpointCallback(BaseCallback):
         window: int = 20,
         min_improvement: float = 1.0,
         patience: int = 5,
+        mode: str = "mean",
     ) -> None:
         super().__init__()
         self.save_path = Path(save_path)
@@ -28,6 +29,10 @@ class BestModelCheckpointCallback(BaseCallback):
         self.window = max(1, int(window))
         self.min_improvement = float(min_improvement)
         self.patience = max(1, int(patience))
+        mode_normalized = mode.lower()
+        if mode_normalized not in {"mean", "max"}:
+            raise ValueError("mode must be 'mean' or 'max'")
+        self.mode = mode_normalized
         self._recent_metrics: deque[float] = deque(maxlen=self.window)
         self._best_metric: float | None = None
         self._no_improve_windows = 0
@@ -36,9 +41,11 @@ class BestModelCheckpointCallback(BaseCallback):
             try:
                 data = json.loads(self.metric_path.read_text())
                 best_val = float(data.get("best_metric"))
+                stored_mode = data.get("mode")
             except Exception:
                 best_val = None
-            if best_val is not None:
+                stored_mode = None
+            if best_val is not None and (stored_mode in {None, self.mode}):
                 self._best_metric = best_val
 
     def _on_step(self) -> bool:
@@ -62,15 +69,20 @@ class BestModelCheckpointCallback(BaseCallback):
         if not updated or len(self._recent_metrics) < self.window:
             return True
 
-        avg_metric = sum(self._recent_metrics) / len(self._recent_metrics)
-        if self._best_metric is None or avg_metric > self._best_metric + self.min_improvement:
+        if self.mode == "mean":
+            current_metric = sum(self._recent_metrics) / len(self._recent_metrics)
+        else:
+            current_metric = max(self._recent_metrics)
+
+        if self._best_metric is None or current_metric > self._best_metric + self.min_improvement:
             self.save_path.parent.mkdir(parents=True, exist_ok=True)
             self.model.save(str(self.save_path))
             try:
-                self.metric_path.write_text(json.dumps({"best_metric": avg_metric}, indent=2))
+                payload = {"best_metric": current_metric, "mode": self.mode}
+                self.metric_path.write_text(json.dumps(payload, indent=2))
             except Exception:
                 pass
-            self._best_metric = avg_metric
+            self._best_metric = current_metric
             self._no_improve_windows = 0
         else:
             self._no_improve_windows += 1

@@ -69,6 +69,7 @@ class TrainingConfig:
     stagnation_backtrack_alert_hits: int = 2
     best_checkpoint: Optional[Path] = None
     best_metric_key: str = "mario_x"
+    best_metric_mode: str = "mean"
     best_window: int = 20
     best_patience: int = 5
     best_min_improvement: float = 1.0
@@ -216,6 +217,7 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         stagnation_backtrack_alert_hits=2,
         best_checkpoint=best_checkpoint,
         best_metric_key=args.best_metric_key,
+        best_metric_mode=args.best_metric_mode,
         best_window=int(args.best_window),
         best_patience=int(args.best_patience),
         best_min_improvement=float(args.best_min_improve),
@@ -347,6 +349,12 @@ def main() -> None:
         "--best-metric-key",
         default="mario_x",
         help="Metrics key from info.metrics used to evaluate best model (default: mario_x).",
+    )
+    parser.add_argument(
+        "--best-metric-mode",
+        choices=["mean", "max"],
+        default="mean",
+        help="Aggregation mode for best metric (mean or max of recent window).",
     )
     parser.add_argument(
         "--best-window",
@@ -590,6 +598,7 @@ def main() -> None:
             window=config.best_window,
             min_improvement=config.best_min_improvement,
             patience=config.best_patience,
+            mode=config.best_metric_mode,
         )
         callbacks.append(best_checkpoint_callback)
 
