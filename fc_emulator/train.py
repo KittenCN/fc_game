@@ -516,8 +516,11 @@ def main() -> None:
     if checkpoint_path:
         print(f"Loading checkpoint: {checkpoint_path.name}")
         model = algo_cls.load(str(checkpoint_path), env=vec_env, device=config.device)
-        if tensorboard_log and hasattr(model, "tensorboard_log"):
-            model.tensorboard_log = tensorboard_log
+        if hasattr(model, "tensorboard_log"):
+            if tensorboard_log:
+                model.tensorboard_log = tensorboard_log
+            else:
+                model.tensorboard_log = None
     else:
         model = algo_cls(
             config.policy,
@@ -611,8 +614,11 @@ def main() -> None:
             if best_path and best_path.exists():
                 print(f"Reloading best checkpoint from {best_path}")
                 model = algo_cls.load(str(best_path), env=vec_env, device=config.device)
-                if tensorboard_log and hasattr(model, "tensorboard_log"):
-                    model.tensorboard_log = tensorboard_log
+                if hasattr(model, "tensorboard_log"):
+                    if tensorboard_log:
+                        model.tensorboard_log = tensorboard_log
+                    else:
+                        model.tensorboard_log = None
                 model.num_timesteps = after_steps
             else:
                 print("Best checkpoint flagged for reload but file not found; continuing without reload.")
