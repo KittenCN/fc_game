@@ -20,6 +20,7 @@ from .callbacks import (
     EpisodeLogCallback,
     ExplorationEpsilonCallback,
     EntropyCoefficientCallback,
+    BestModelCheckpointCallback,
 )
 from .policies import POLICY_PRESETS
 from .rewards import REWARD_PRESETS
@@ -66,6 +67,11 @@ class TrainingConfig:
     stagnation_idle_multiplier: float
     stagnation_backtrack_penalty_scale: float
     stagnation_backtrack_alert_hits: int = 2
+    best_checkpoint: Optional[Path] = None
+    best_metric_key: str = "mario_x"
+    best_window: int = 20
+    best_patience: int = 5
+    best_min_improvement: float = 1.0
     exploration: dict[str, Any] = field(default_factory=dict)
     exploration_env_initial: float = 0.0
     entropy: dict[str, Any] = field(default_factory=dict)
@@ -180,6 +186,11 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
 
     max_episode_steps = args.max_episode_steps if args.max_episode_steps > 0 else None
 
+    best_checkpoint: Optional[Path] = None
+    if args.best_checkpoint and args.best_checkpoint.lower() != "none":
+        candidate = Path(args.best_checkpoint)
+        best_checkpoint = candidate if candidate.is_absolute() else log_dir / candidate
+
     return TrainingConfig(
         rom=rom_path,
         log_dir=log_dir,
@@ -202,6 +213,11 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         stagnation_idle_multiplier=float(args.stagnation_idle_multiplier),
         stagnation_backtrack_penalty_scale=float(args.stagnation_backtrack_penalty_scale),
         stagnation_backtrack_alert_hits=2,
+        best_checkpoint=best_checkpoint,
+        best_metric_key=args.best_metric_key,
+        best_window=int(args.best_window),
+        best_patience=int(args.best_patience),
+        best_min_improvement=float(args.best_min_improve),
         exploration={
             "initial": exploration_initial,
             "final": exploration_final,
@@ -321,6 +337,33 @@ def main() -> None:
         default=1.5,
         help="Penalty factor applied when mario retreats (scaled by frame_skip).",
         dest="stagnation_backtrack_penalty_scale",
+    )
+    parser.add_argument(
+        "--best-checkpoint",
+        help="Enable best-model checkpointing (path to save). Use 'none' to disable.",
+    )
+    parser.add_argument(
+        "--best-metric-key",
+        default="mario_x",
+        help="Metrics key from info.metrics used to evaluate best model (default: mario_x).",
+    )
+    parser.add_argument(
+        "--best-window",
+        type=int,
+        default=20,
+        help="Number of episodes per evaluation window when tracking best model.",
+    )
+    parser.add_argument(
+        "--best-patience",
+        type=int,
+        default=5,
+        help="Number of windows without improvement before reloading the best checkpoint.",
+    )
+    parser.add_argument(
+        "--best-min-improve",
+        type=float,
+        default=1.0,
+        help="Minimum average metric improvement required to treat new model as better.",
     )
     parser.add_argument(
         "--exploration-epsilon",
@@ -531,10 +574,47 @@ def main() -> None:
         )
     )
 
+    best_checkpoint_callback: BestModelCheckpointCallback | None = None
+    if config.best_checkpoint is not None:
+        best_checkpoint_callback = BestModelCheckpointCallback(
+            save_path=config.best_checkpoint,
+            metric_key=config.best_metric_key,
+            window=config.best_window,
+            min_improvement=config.best_min_improvement,
+            patience=config.best_patience,
+        )
+        callbacks.append(best_checkpoint_callback)
+
     config_path = _save_config(config)
     print(f"Saved run config to {config_path}")
 
-    model.learn(total_timesteps=config.total_timesteps, callback=callbacks)
+    total_trained = 0
+    chunk_size = config.checkpoint_freq if config.checkpoint_freq > 0 else config.total_timesteps
+
+    while total_trained < config.total_timesteps:
+        remaining = config.total_timesteps - total_trained
+        current_chunk = min(chunk_size, remaining)
+        before_steps = model.num_timesteps
+        model.learn(total_timesteps=current_chunk, callback=callbacks, reset_num_timesteps=False)
+        after_steps = model.num_timesteps
+        actual_chunk = max(0, after_steps - before_steps)
+        total_trained += actual_chunk
+
+        if best_checkpoint_callback and best_checkpoint_callback.should_reload_best:
+            best_checkpoint_callback.reset_trigger()
+            best_path = config.best_checkpoint
+            if best_path and best_path.exists():
+                print(f"Reloading best checkpoint from {best_path}")
+                model = algo_cls.load(str(best_path), env=vec_env, device=config.device)
+                if tensorboard_log and hasattr(model, "tensorboard_log"):
+                    model.tensorboard_log = tensorboard_log
+                model.num_timesteps = after_steps
+            else:
+                print("Best checkpoint flagged for reload but file not found; continuing without reload.")
+
+        if actual_chunk == 0 and not (best_checkpoint_callback and best_checkpoint_callback.should_reload_best):
+            print("Stopping early: no training progress detected in the last chunk.")
+            break
 
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     model_path = config.log_dir / f"{config.algo}_agent_{timestamp}"

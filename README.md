@@ -112,5 +112,10 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 
 欢迎通过 Issue / PR 反馈需求，共同完善 FC Emulator Toolkit。
 
+## 最佳模型回滚（可选）
+- 通过 `--best-checkpoint best_agent.zip` 启用最优模型保存；默认以最近 20 个 episode 的 `mario_x` 平均值衡量表现，并在连续 5 个窗口无改进时回退到最佳权重继续训练。
+- 可使用 `--best-metric-key`、`--best-window`、`--best-patience`、`--best-min-improve` 调整指标来源、窗口大小、耐心与最小改进幅度，满足不同实验需求。
+- 最优模型文件存放在 `log_dir` 下指定路径，可与常规 checkpoint 配合使用，便于快速回溯。
+
 ## 更新维护记录
 - 近期问题、实验结果与后续计划已迁移至 [`docs/UPDATE_LOG.md`](docs/UPDATE_LOG.md)，请在更新诊断信息或实验结论时同步维护该文件。

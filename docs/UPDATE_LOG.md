@@ -143,8 +143,10 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 #### 采取的方案
 - 移除强制回退截断逻辑，改为根据回退次数发出 `backtrack_warning`，仅向探索与奖励提供信号。
 - 将回退进度阈值提升至 256，并要求同一热点连续两次回退才触发警告；`backtrack_penalty_scale` 提升至 1.5。
-- 在奖励塑形中加入“前进保持奖励”与“回退连击惩罚”，鼓励持续向前、抑制频繁回头。
-- 受影响文件：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`train.py`、`rewards.py`、`callbacks.py`。
+- 在奖励塑形中改为“正向进度 + 闲置惩罚 + 回退扣分”简化模型，避免巨额负值；引入前进保持奖励与回退连击惩罚。
+- `EpsilonRandomActionWrapper` 在收到多次回退告警时自动注入前进宏动作序列，形成“救援”机制。
+- 新增最优模型检查点回调：按窗口平均 `mario_x` 保存最佳模型，并在连续窗口无改进时自动回滚到最佳权重继续训练。
+- 受影响文件：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`train.py`、`rewards.py`、`callbacks.py`、`exploration.py`。
 
 #### 下一步计划
 - 继续进行 600k timestep 训练，验证 `backtrack_warning` 占比是否下降、≥512 桶样本是否回升（命令见下）。
@@ -165,5 +167,6 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
+  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-window 20 --best-patience 5 --best-min-improve 1.0 \
   --episode-log episode_log_eval3.jsonl --tensorboard
 ```

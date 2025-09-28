@@ -7,6 +7,72 @@ from pathlib import Path
 from typing import Any
 
 from stable_baselines3.common.callbacks import BaseCallback
+from pathlib import Path
+from collections import deque
+
+
+class BestModelCheckpointCallback(BaseCallback):
+    """Persist the best-performing model and signal reloads when progress stalls."""
+
+    def __init__(
+        self,
+        *,
+        save_path: Path,
+        metric_key: str = "mario_x",
+        window: int = 20,
+        min_improvement: float = 1.0,
+        patience: int = 5,
+    ) -> None:
+        super().__init__()
+        self.save_path = Path(save_path)
+        self.metric_key = metric_key
+        self.window = max(1, int(window))
+        self.min_improvement = float(min_improvement)
+        self.patience = max(1, int(patience))
+        self._recent_metrics: deque[float] = deque(maxlen=self.window)
+        self._best_metric: float | None = None
+        self._no_improve_windows = 0
+        self.should_reload_best = False
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos") or []
+        updated = False
+        for info in infos:
+            episode = info.get("episode")
+            if not episode:
+                continue
+            metrics = info.get("metrics") or {}
+            value = metrics.get(self.metric_key)
+            if value is None:
+                continue
+            try:
+                metric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            self._recent_metrics.append(metric_value)
+            updated = True
+
+        if not updated or len(self._recent_metrics) < self.window:
+            return True
+
+        avg_metric = sum(self._recent_metrics) / len(self._recent_metrics)
+        if self._best_metric is None or avg_metric > self._best_metric + self.min_improvement:
+            self.save_path.parent.mkdir(parents=True, exist_ok=True)
+            self.model.save(str(self.save_path))
+            self._best_metric = avg_metric
+            self._no_improve_windows = 0
+        else:
+            self._no_improve_windows += 1
+
+        if self._no_improve_windows >= self.patience:
+            self.should_reload_best = True
+            self._no_improve_windows = 0
+            return False
+
+        return True
+
+    def reset_trigger(self) -> None:
+        self.should_reload_best = False
 
 
 class EpisodeLogCallback(BaseCallback):

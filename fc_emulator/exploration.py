@@ -44,6 +44,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         hotspot_bucket: int = 32,
         sequence_escalation_bias: float = 0.85,
         hotspot_sequence_bias: float = 0.9,
+        rescue_cooldown: int = 45,
+        rescue_hits: int = 2,
     ) -> None:
         super().__init__(env)
         if not isinstance(env.action_space, gym.spaces.Discrete):
@@ -73,6 +75,9 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._last_mario_x: int | None = None
         self._recent_direction: str | None = None
         self._last_action: int | None = None
+        self._rescue_cooldown = 0
+        self._rescue_cooldown_max = max(0, int(rescue_cooldown))
+        self._rescue_hits = max(1, int(rescue_hits))
 
     def reset(self, **kwargs):  # type: ignore[override]
         self._macro_queue.clear()
@@ -81,6 +86,7 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         self._recent_direction = None
         self._last_action = None
         self._refresh_hotspot_target()
+        self._rescue_cooldown = 0
         return super().reset(**kwargs)
 
     # Public API ---------------------------------------------------------
@@ -225,6 +231,13 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         if info.get("stagnation_truncated"):
             event = metrics.get("stagnation_event") or info.get("stagnation_event")
             self._register_hotspot(x_pos, event=event)
+        hits = metrics.get("backtrack_hits")
+        if (
+            hits is not None
+            and int(hits) >= self._rescue_hits
+            and self._rescue_cooldown == 0
+        ):
+            self._trigger_rescue()
 
     # Gym overrides ------------------------------------------------------
     def step(self, action):  # type: ignore[override]
@@ -235,6 +248,8 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
     def action(self, action: int) -> int:  # type: ignore[override]
         if self._macro_cooldown > 0:
             self._macro_cooldown = max(0, self._macro_cooldown - 1)
+        if self._rescue_cooldown > 0:
+            self._rescue_cooldown = max(0, self._rescue_cooldown - 1)
 
         if self._macro_queue:
             choice = int(self._macro_queue.popleft())
@@ -305,6 +320,19 @@ class EpsilonRandomActionWrapper(gym.ActionWrapper):
         sampled = int(self.action_space.sample())
         self._last_action = sampled
         return sampled
+
+    def _trigger_rescue(self) -> None:
+        if self._rescue_cooldown > 0:
+            return
+        sequence = None
+        if self._forward_sequences:
+            sequence = self._select_sequence(self._forward_sequences)
+        elif self._skill_sequences:
+            sequence = self._select_sequence(self._skill_sequences)
+        if sequence:
+            self._queue_macro(sequence)
+            self._rescue_cooldown = self._rescue_cooldown_max or len(sequence)
+            self._recent_direction = "forward"
 
 
 __all__ = [
