@@ -100,3 +100,31 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
   --episode-log episode_log_fast.jsonl --tensorboard
 ```
+
+### 2025-09-28 深夜（20 万步回归评估）
+
+#### 发现的问题
+- `episode_log_fast.jsonl` 共 1194 回合，平均长度 204 步，`mario_x` 均值仅 72，最大 860；≥512 的样本占比 4.4%。
+- `stagnation_reason` 以 `backtrack` 为主（900 次，75%）；热点统计中 `bucket=0` 占 72%，说明代理仍大量回落至出生点。
+- `stagnation_event` 中有 776 次被记为 `level_transition`，实际由强制 `backtrack_stop` 提前终止引发，导致 epsilon 提升逻辑未触发。
+- 大量回合在达到最佳进度后立即被截断（`stagnation_frames≈4`，`stagnation_idle_frames≈580`），主因是回退阈值在较小进度也会触发，复位过于激进。
+
+#### 分析与原因
+- `StagnationMonitor` 未限制最小进度，导致刚跨出起点即触发 `backtrack_stop`，大量 episode 在出生点周围循环。
+- `ExplorationEpsilonCallback` 仅根据 `stagnation_event` 判断热点重复，未覆盖被标记为 `level_transition` 的 backtrack-stop 回合，导致 ε 提升从未发生。
+
+#### 采取的方案
+- 引入最小进度门槛 `backtrack_stop_min_progress`（默认 128），仅当达到该进度后才允许强制回退截断。
+- 强制截断时统一写入 `stagnation_event='backtrack_stop'`，避免与真实关卡切换混淆。
+- `ExplorationEpsilonCallback` 同时监控 `stagnation_reason` 与 `stagnation_event`，并将触发种类扩展至 `backtrack_stop`/`score_loop`，阈值降至 3 次以更快提升 ε。
+
+#### 实施改动
+- 代码文件：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`train.py`、`callbacks.py`
+- 要点：
+  - 新增 CLI 参数 `--stagnation-backtrack-stop-min` 并贯通配置/环境；
+  - 在 `StagnationMonitor` 中校验最小进度并统一事件标签；
+  - 更新 epsilon 调度逻辑以捕获 backtrack-stop，缩短触发阈值。
+
+#### 下一步计划
+- 在新逻辑下继续 400k~500k timestep 训练以观察热点扩散与 ≥512 样本占比变化（参数见下）。
+- 关注 `docs/UPDATE_LOG.md` 中 `stagnation_event='backtrack_stop'` 的占比，确认是否显著下降。

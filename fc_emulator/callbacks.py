@@ -186,7 +186,7 @@ class ExplorationEpsilonCallback(BaseCallback):
         final_epsilon: float,
         decay_steps: int,
         boost_epsilon: float = 0.05,
-        boost_threshold: int = 4,
+        boost_threshold: int = 3,
         boost_duration: int = 100_000,
     ) -> None:
         super().__init__()
@@ -200,7 +200,8 @@ class ExplorationEpsilonCallback(BaseCallback):
         self._boost_steps_remaining = 0
         self._repeat_bucket: int | None = None
         self._repeat_count = 0
-        self._boost_events = {"stagnation", "backtrack", "no_progress"}
+        self._boost_events = {"stagnation", "backtrack", "no_progress", "backtrack_stop", "score_loop"}
+        self._boost_reasons = {"stagnation", "backtrack", "no_progress", "score_loop"}
 
     def _on_training_start(self) -> None:
         self._boost_steps_remaining = 0
@@ -222,12 +223,15 @@ class ExplorationEpsilonCallback(BaseCallback):
             metrics = info.get("metrics") or {}
             bucket = metrics.get("stagnation_bucket")
             event = metrics.get("stagnation_event")
+            reason = metrics.get("stagnation_reason")
             truncated = bool(info.get("stagnation_truncated"))
             if (
                 isinstance(bucket, int)
-                and isinstance(event, str)
-                and event in self._boost_events
                 and truncated
+                and (
+                    (isinstance(event, str) and event in self._boost_events)
+                    or (isinstance(reason, str) and reason in self._boost_reasons)
+                )
             ):
                 if bucket == self._repeat_bucket:
                     self._repeat_count += 1

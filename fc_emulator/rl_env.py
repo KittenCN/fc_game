@@ -68,6 +68,7 @@ class NESGymEnv(gym.Env):
         stagnation_idle_multiplier: float = 1.1,
         stagnation_backtrack_penalty_scale: float = 1.0,
         stagnation_backtrack_stop_ratio: float = 0.7,
+        stagnation_backtrack_stop_min_progress: int = 128,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
@@ -99,6 +100,7 @@ class NESGymEnv(gym.Env):
                 idle_limit_multiplier=float(stagnation_idle_multiplier),
                 backtrack_penalty_scale=float(stagnation_backtrack_penalty_scale),
                 backtrack_stop_ratio=float(stagnation_backtrack_stop_ratio),
+                backtrack_stop_min_progress=int(stagnation_backtrack_stop_min_progress),
             )
         )
 

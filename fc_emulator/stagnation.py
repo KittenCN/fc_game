@@ -20,6 +20,7 @@ class StagnationConfig:
     score_relief_cap_ratio: float = 0.45
     backtrack_penalty_scale: float = 1.0
     backtrack_stop_ratio: float = 0.7
+    backtrack_stop_min_progress: int = 128
 
 
 @dataclass
@@ -276,15 +277,16 @@ class StagnationMonitor:
 
         forced_backtrack = False
         backtrack_ratio = max(0.0, min(1.0, self.config.backtrack_stop_ratio))
+        min_progress = max(0, int(self.config.backtrack_stop_min_progress))
         if (
             backtrack_ratio > 0.0
-            and self._max_progress_x > 0
+            and self._max_progress_x >= max(min_progress, self.config.progress_threshold)
             and current_x < int(self._max_progress_x * backtrack_ratio)
             and self._max_progress_x - current_x >= max(1, self.config.progress_threshold)
         ):
             forced_backtrack = True
-            event = event or "backtrack_stop"
             reason = "backtrack"
+            event = "backtrack_stop"
 
         if forced_backtrack:
             triggered = True

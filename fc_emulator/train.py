@@ -66,6 +66,7 @@ class TrainingConfig:
     stagnation_idle_multiplier: float
     stagnation_backtrack_penalty_scale: float
     stagnation_backtrack_stop_ratio: float
+    stagnation_backtrack_stop_min_progress: int
     exploration: dict[str, Any] = field(default_factory=dict)
     exploration_env_initial: float = 0.0
     entropy: dict[str, Any] = field(default_factory=dict)
@@ -202,6 +203,7 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         stagnation_idle_multiplier=float(args.stagnation_idle_multiplier),
         stagnation_backtrack_penalty_scale=float(args.stagnation_backtrack_penalty_scale),
         stagnation_backtrack_stop_ratio=float(args.stagnation_backtrack_stop_ratio),
+        stagnation_backtrack_stop_min_progress=int(args.stagnation_backtrack_stop_min),
         exploration={
             "initial": exploration_initial,
             "final": exploration_final,
@@ -327,6 +329,12 @@ def main() -> None:
         type=float,
         default=0.7,
         help="Trigger early termination when progress falls below this fraction of the best position.",
+    )
+    parser.add_argument(
+        "--stagnation-backtrack-stop-min",
+        type=int,
+        default=128,
+        help="Minimum mario_x reached before backtrack-stop termination can trigger.",
     )
     parser.add_argument(
         "--exploration-epsilon",
@@ -462,6 +470,7 @@ def main() -> None:
         stagnation_idle_multiplier=config.stagnation_idle_multiplier,
         stagnation_backtrack_penalty_scale=config.stagnation_backtrack_penalty_scale,
         stagnation_backtrack_stop_ratio=config.stagnation_backtrack_stop_ratio,
+        stagnation_backtrack_stop_min_progress=config.stagnation_backtrack_stop_min_progress,
         frame_stack=config.frame_stack,
         use_icm=config.use_icm,
         icm_kwargs=config.icm if config.use_icm else None,

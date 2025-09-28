@@ -179,6 +179,7 @@ def build_env(
     stagnation_idle_multiplier: float,
     stagnation_backtrack_penalty_scale: float,
     stagnation_backtrack_stop_ratio: float,
+    stagnation_backtrack_stop_min_progress: int,
 ) -> gym.Env:
     reward_cfg = reward_config_factory() if reward_config_factory else None
     env = NESGymEnv(
@@ -196,6 +197,7 @@ def build_env(
         stagnation_idle_multiplier=stagnation_idle_multiplier,
         stagnation_backtrack_penalty_scale=stagnation_backtrack_penalty_scale,
         stagnation_backtrack_stop_ratio=stagnation_backtrack_stop_ratio,
+        stagnation_backtrack_stop_min_progress=stagnation_backtrack_stop_min_progress,
     )
     if resize_shape and observation_type in {"rgb", "gray", "rgb_ram", "gray_ram"}:
         env = ResizeObservationWrapper(env, resize_shape)
@@ -260,6 +262,7 @@ def make_vector_env(
     stagnation_idle_multiplier: float = 1.1,
     stagnation_backtrack_penalty_scale: float = 1.0,
     stagnation_backtrack_stop_ratio: float = 0.7,
+    stagnation_backtrack_stop_min_progress: int = 128,
     frame_stack: int = 4,
     use_icm: bool = False,
     icm_kwargs: dict | None = None,
@@ -289,6 +292,7 @@ def make_vector_env(
             stagnation_idle_multiplier=stagnation_idle_multiplier,
             stagnation_backtrack_penalty_scale=stagnation_backtrack_penalty_scale,
             stagnation_backtrack_stop_ratio=stagnation_backtrack_stop_ratio,
+            stagnation_backtrack_stop_min_progress=stagnation_backtrack_stop_min_progress,
         ),
         vec_env_cls=vec_cls,
     )
