@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from stable_baselines3.common.callbacks import BaseCallback
-from pathlib import Path
-from collections import deque
 
 
 class BestModelCheckpointCallback(BaseCallback):
@@ -25,6 +23,7 @@ class BestModelCheckpointCallback(BaseCallback):
     ) -> None:
         super().__init__()
         self.save_path = Path(save_path)
+        self.metric_path = self.save_path.with_suffix(".json")
         self.metric_key = metric_key
         self.window = max(1, int(window))
         self.min_improvement = float(min_improvement)
@@ -33,6 +32,14 @@ class BestModelCheckpointCallback(BaseCallback):
         self._best_metric: float | None = None
         self._no_improve_windows = 0
         self.should_reload_best = False
+        if self.metric_path.exists():
+            try:
+                data = json.loads(self.metric_path.read_text())
+                best_val = float(data.get("best_metric"))
+            except Exception:
+                best_val = None
+            if best_val is not None:
+                self._best_metric = best_val
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos") or []
@@ -59,6 +66,10 @@ class BestModelCheckpointCallback(BaseCallback):
         if self._best_metric is None or avg_metric > self._best_metric + self.min_improvement:
             self.save_path.parent.mkdir(parents=True, exist_ok=True)
             self.model.save(str(self.save_path))
+            try:
+                self.metric_path.write_text(json.dumps({"best_metric": avg_metric}, indent=2))
+            except Exception:
+                pass
             self._best_metric = avg_metric
             self._no_improve_windows = 0
         else:
