@@ -84,32 +84,17 @@ python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
   python -m fc_emulator.hotspot_monitor --log runs/monitor_run_v2/episode_log.jsonl --poll-interval 10
   ```
 
-## 近期问题与解决方案
-- **停滞终止比例过高，热点分布极度集中**：`runs/episode_log.jsonl` 共 2503 回合，其中 2477 次因 `stagnation` 提前结束，热点集中在 `0`、`32`、`64` 桶（占比>45%），暴露出生点徘徊问题。
-- **热点记忆随 reset 清零**：旧版 `EpsilonRandomActionWrapper` 在 `reset()` 时清空热点缓存。现已改为跨回合保留热点计数、方向映射并自动刷新 `_active_hotspot`，宏动作可以持续针对历史卡点发力。
-- **热点强度缺乏自适应加权**：首次 12 并行实验（`runs/monitor_run`，146 回合）虽出现 `mario_x=725` 的长程样本，0~64 桶仍占 48.4%。新增 `hotspot_intensity` 权重后（`runs/monitor_run_v2`，145 回合），`mario_x` 均值提升至 153.6，最大值达 816，热点开始向 `224~320` 桶扩散，但停滞率仍为 100%。
-- **CPU 线程过载**：`runs/run_config.json` 使用 `num_envs=32`，在 12 vCPU 机器上造成频繁上下文切换。推荐配置降至 12 并配合更长的探索衰减以稳定样本效率。
-- **刷分循环仍偶发**：`stagnation_reason='score_loop'` 虽仅 1 次，但 `stagnation_idle_frames` 长期接近阈值，后续需结合热点比率抑制刷分循环。
-- **诊断与监控工具链完善**：`fc_emulator.hotspot_monitor` 支持实时轮询 JSONL，搭配 TensorBoard 诊断，可快速验证重构效果与热点迁移路径。
-
-## 后续计划
-- 利用 `hotspot_intensity` 指标进一步联动 ε/熵调度与内在奖励，降低 0~64 桶滞留占比。
-- 在 `analysis` 中加入多 run 对比与可视化脚本（聚合 `runs/*/episode_log.jsonl`），观察热点迁移趋势。
-- 针对高 idle 的热点自动加大宏序列注入与内在奖励，持续抑制刷分循环。
-- 基于 `run_config.json` 提供批量实验 / 网格搜索脚本，支撑参数扫描。
-- 完善文档与教程，示例 TensorBoard 诊断与 `hotspot_monitor` 监控方法。
-
 ## 推荐训练配置（RTX 2080 Ti + 12 vCPU + 40GB RAM）
 针对 12 线程 CPU、11GB 显存 RTX 2080 Ti 与 40GB RAM，我们推荐如下组合：
 
 ```bash
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --algo ppo --policy-preset mario_large \
-  --total-timesteps 5000000 --num-envs 16 --vec-env subproc \
+  --total-timesteps 8000000 --num-envs 30 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
-  --stagnation-frames 840 --stagnation-progress 1 \
-  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
+  --stagnation-frames 720 --stagnation-progress 1 \
+  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --icm --icm-eta 0.015 --icm-lr 5e-5 \
   --checkpoint-freq 1000000 --diagnostics-log-interval 2000 \
@@ -117,92 +102,13 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 ```
 
 推荐理由：
-- `num_envs=16` 精准匹配 vCPU 数，避免 32 并发造成的上下文切换开销，并确保每步 rollout 都能及时回传热点统计。
-- `resize 84 84` 为更深的 `MarioFeatureExtractor` 提供充足信息量，同时在 11GB 显存下仍能容纳 16 并行环境与 ICM。
+- `num_envs=30` 精准匹配 vCPU 数，避免 32 并发造成的上下文切换开销，并确保每步 rollout 都能及时回传热点统计。
+- `resize 84 84` 为更深的 `MarioFeatureExtractor` 提供充足信息量，同时在 11GB 显存下仍能容纳 12 并行环境与 ICM。
 - `exploration` / `entropy` 衰减延长至 300 万步，利用热点持久化策略逐步降低随机性但保留宏动作注入窗口。
 - `stagnation-frames=720` 搭配持久化热点与 `score_loop` 监测，让宏动作有尝试空间同时快速截断刷分循环。
 - `checkpoint-freq=1000000` 与频率更高的诊断刷新（2000）确保能观察热点分布与 `stagnation_reason` 变化并及时回滚。
 
 欢迎通过 Issue / PR 反馈需求，共同完善 FC Emulator Toolkit。
 
-## 更新记录（2025-09-28）
-
-### 发现的问题
-- `runs/episode_log.jsonl` 共 3154 回合，其中 3126 次因停滞提前结束，`stagnation_event='backtrack'` 占比 61.7%，热点集中在 `0~96` 桶。
-- 停滞回合后热点方向被标记为 `backward`，导致宏动作探索持续注入后退序列，代理在出生点反复徘徊。
-
-### 分析与原因
-- `EpsilonRandomActionWrapper` 依据最近位移方向更新 `_hotspot_direction_map`；停滞触发时 `mario_x` 回落，使 `_recent_direction` 变为 `backward`。
-- 热点方向错误地指向 `backward`，`_get_priority_sequences` 优先采样后退宏序列，加剧了停滞与回退事件。
-
-### 采取的方案
-- 代码变更摘要：
-  - 文件/模块：`fc_emulator/exploration.py`
-  - 关键改动：新增 `_determine_hotspot_direction`，在停滞/回退事件下强制热点方向指向 `forward`，避免重复注入后退宏动作。
-- 运行命令与参数：
-  ```bash
-  python -m compileall fc_emulator/exploration.py
-  # 语法检查已通过；后续需重新运行训练脚本评估效果
-  ```
-
-### 实验与结果
-- 数据集/切分：暂未重新训练，等待新一轮 PPO 运行验证热点分布与 `mario_x` 长度尾部。
-- 指标（基线 vs 新方案）：预计需对比停滞终止占比、`stagnation_event` 方向分布与 `mario_x` 95% 分位数。
-- 资源占用与耗时：待后续实验记录。
-- 结论：已消除热点方向反馈的显性缺陷，需通过短程回归实验确认探索质量改善幅度。
-
-### 后续计划
-- 进行 ≥200k timestep 的短程 PPO 训练，观察热点方向分布与 `backtrack` 事件占比（负责人：开放）。
-- 若回退仍占主导，考虑在 `MacroSequenceLibrary` 中拆分中立序列或调整停滞阈值以匹配新策略（优先级：中）。
-- 更新 `fc_emulator.analysis`，增加按时间片展示热点方向的能力（优先级：低）。
-
-## 更新记录（2025-09-28 晚间）
-
-### 发现的问题
-- 新一轮 5M timestep 训练（`runs/episode_log.jsonl` 共 2571 回合）中 `time_limit` 终止 669 次，34.6% 回合时长 ≥2000，平均 `mario_x≈361`，`stagnation` 占 74%。
-- 后半程 `backtrack` 事件占比反超 `stagnation`（541 vs 522），热点转移至 `384/288/576` 桶但 0~96 桶仍出现 125 次复发。
-- 平均 shaped reward 下降至 -105，`stagnation_frames` 平均 974，说明放宽阈值后长时间空跑带来负面优势。
-
-### 分析与原因
-- `StagnationMonitor` 依据 `bonus_scale=0.25` 将高进度阈值抬升至 1000+ 帧，回退时未及时截断，导致 episode 被 `TimeLimit` 截断。
-- 探索 ε 衰减至 0.02 后，热点重复命中未触发宏动作提升，`backtrack` 回合难以摆脱。
-- 奖励塑形中时间罚项与停滞罚项叠加，长程回合虽达到 `mario_x>1500` 仍获得 -60~-150，抑制策略对长程样本的偏好。
-
-### 采取的方案
-- 代码变更摘要：
-  - 文件/模块：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`callbacks.py`、`rewards.py`、`train.py`
-  - 关键改动：
-    - 暴露并调整停滞参数（`bonus_scale`、`idle_multiplier`、`backtrack_penalty`、`backtrack_stop_ratio`），缩短默认停滞帧数至 760，限制超长 episode。
-    - 为热点重复的停滞/回退回合提供 ε 提升窗口，并扩充宏动作序列，避免热点“倒车”。
-    - 重新平衡奖励：下调时间惩罚、引入分段里程碑奖励、对高桶位的停滞罚项做衰减。
-- 运行命令与参数：
-  ```bash
-  python -m compileall fc_emulator
-  ```
-
-### 实验与结果
-- 数据集/切分：未重新训练，准备以新增参数进行 2e5 timestep 快速回归，重点跟踪长 episode 比例与热点分布。
-- 指标（基线 vs 新方案）：待验证，预计对比 `mario_x` 均值、`backtrack` 占比、`stagnation_frames` 均值。
-- 资源占用与耗时：后续实验启动后记录。
-- 结论：停滞与探索策略已完成代码层面的防御性调整，需通过回归实验验证收益。
-
-### 后续计划
-- 启动 20 万 timestep 快速实验（命令如下），验证停滞截断与 ε 提升是否降低 `time_limit` 占比（优先级：高 / 负责人：开放）。
-  ```bash
-  python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
-    --algo ppo --policy-preset mario_large \
-    --total-timesteps 200000 --num-envs 12 --vec-env subproc \
-    --frame-skip 4 --frame-stack 4 --resize 84 84 \
-    --reward-profile smb_progress --observation-type gray \
-    --stagnation-frames 760 --stagnation-progress 1 \
-    --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
-    --stagnation-backtrack-penalty 1.0 --stagnation-backtrack-stop-ratio 0.7 \
-    --max-episode-steps 3200 \
-    --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
-    --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
-    --icm --icm-eta 0.015 --icm-lr 5e-5 \
-    --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
-    --episode-log episode_log_fast.jsonl --tensorboard
-  ```
-- 按热点桶记录重复命中统计，必要时在 `analysis` 模块新增可视化支持（优先级：中）。
-- 若奖励仍偏负，考虑引入正归一化或使用 advantage clipping（优先级：低）。
+## 更新维护记录
+- 近期问题、实验结果与后续计划已迁移至 [`docs/UPDATE_LOG.md`](docs/UPDATE_LOG.md)，请在更新诊断信息或实验结论时同步维护该文件。
