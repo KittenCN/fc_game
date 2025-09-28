@@ -62,6 +62,10 @@ class TrainingConfig:
     auto_start_press_frames: int
     stagnation_max_frames: Optional[int]
     stagnation_progress_threshold: int
+    stagnation_bonus_scale: float
+    stagnation_idle_multiplier: float
+    stagnation_backtrack_penalty_scale: float
+    stagnation_backtrack_stop_ratio: float
     exploration: dict[str, Any] = field(default_factory=dict)
     exploration_env_initial: float = 0.0
     entropy: dict[str, Any] = field(default_factory=dict)
@@ -194,6 +198,10 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         auto_start_press_frames=auto_start_press_frames,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
+        stagnation_bonus_scale=float(args.stagnation_bonus_scale),
+        stagnation_idle_multiplier=float(args.stagnation_idle_multiplier),
+        stagnation_backtrack_penalty_scale=float(args.stagnation_backtrack_penalty_scale),
+        stagnation_backtrack_stop_ratio=float(args.stagnation_backtrack_stop_ratio),
         exploration={
             "initial": exploration_initial,
             "final": exploration_final,
@@ -237,7 +245,7 @@ def main() -> None:
     parser.add_argument("--num-envs", type=int, default=4)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
-    parser.add_argument("--max-episode-steps", type=int, default=5_000)
+    parser.add_argument("--max-episode-steps", type=int, default=3_200)
     parser.add_argument(
         "--observation-type",
         choices=["rgb", "gray", "rgb_ram", "gray_ram", "ram"],
@@ -286,7 +294,7 @@ def main() -> None:
     parser.add_argument(
         "--stagnation-frames",
         type=int,
-        default=900,
+        default=760,
         help="End episodes early if no forward progress for this many frames (0 disables).",
     )
     parser.add_argument(
@@ -294,6 +302,31 @@ def main() -> None:
         type=int,
         default=1,
         help="Minimum forward distance (in mario_x) treated as real progress when tracking stagnation.",
+    )
+    parser.add_argument(
+        "--stagnation-bonus-scale",
+        type=float,
+        default=0.15,
+        help="Additional allowance (ratio of best mario_x) before stagnation triggers.",
+    )
+    parser.add_argument(
+        "--stagnation-idle-multiplier",
+        type=float,
+        default=1.1,
+        help="Multiplier for idle-based termination relative to stagnation limit.",
+    )
+    parser.add_argument(
+        "--stagnation-backtrack-penalty",
+        type=float,
+        default=1.0,
+        help="Penalty factor applied when mario retreats (scaled by frame_skip).",
+        dest="stagnation_backtrack_penalty_scale",
+    )
+    parser.add_argument(
+        "--stagnation-backtrack-stop-ratio",
+        type=float,
+        default=0.7,
+        help="Trigger early termination when progress falls below this fraction of the best position.",
     )
     parser.add_argument(
         "--exploration-epsilon",
@@ -425,6 +458,10 @@ def main() -> None:
         exploration_epsilon=config.exploration_env_initial,
         stagnation_max_frames=config.stagnation_max_frames,
         stagnation_progress_threshold=config.stagnation_progress_threshold,
+        stagnation_bonus_scale=config.stagnation_bonus_scale,
+        stagnation_idle_multiplier=config.stagnation_idle_multiplier,
+        stagnation_backtrack_penalty_scale=config.stagnation_backtrack_penalty_scale,
+        stagnation_backtrack_stop_ratio=config.stagnation_backtrack_stop_ratio,
         frame_stack=config.frame_stack,
         use_icm=config.use_icm,
         icm_kwargs=config.icm if config.use_icm else None,

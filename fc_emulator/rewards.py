@@ -35,7 +35,7 @@ def make_super_mario_progress_reward(
     *,
     progress_scale: float = 0.05,
     backward_penalty: float = 0.1,
-    time_penalty: float = 0.01,
+    time_penalty: float = 0.006,
     death_penalty: float = -25.0,
     score_scale: float = 0.01,
     stagnation_penalty: float = 10.0,
@@ -48,13 +48,14 @@ def make_super_mario_progress_reward(
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
-    state: Dict[str, float | int | None] = {
+    state: Dict[str, float | int | None | set[int]] = {
         "prev_x": None,
         "prev_timer": None,
         "prev_score": None,
         "best_x": 0,
         "stagnation_steps": 0,
         "prev_player_state": None,
+        "milestones": set(),
     }
 
     def on_reset() -> None:
@@ -64,6 +65,7 @@ def make_super_mario_progress_reward(
         state["best_x"] = 0
         state["stagnation_steps"] = 0
         state["prev_player_state"] = None
+        state["milestones"] = set()
 
     def shaper(context: RewardContext) -> float:
         metrics = context.info.get("metrics", {})
@@ -101,6 +103,14 @@ def make_super_mario_progress_reward(
         if x_pos > best_x:
             milestone_bonus = (x_pos - best_x) * milestone_scale
             state["best_x"] = x_pos
+
+        milestone_reward = 0.0
+        reached: set[int] = state["milestones"]  # type: ignore[assignment]
+        milestone_targets = ((512, 5.0), (768, 7.5), (1024, 10.0), (1536, 12.0))
+        for threshold, bonus in milestone_targets:
+            if x_pos >= threshold and threshold not in reached:
+                milestone_reward += bonus
+                reached.add(threshold)
 
         score = metrics.get("score")
         if score is None:
@@ -144,10 +154,16 @@ def make_super_mario_progress_reward(
             + micro_progress_value
             + escape_bonus_value
             + powerup_reward
+            + milestone_reward
         )
 
         if context.info.get("stagnation_truncated"):
-            shaped_reward -= stagnation_penalty
+            bucket = metrics.get("stagnation_bucket")
+            penalty_scale = 1.0
+            if bucket is not None:
+                normalised = min(max(int(bucket), 0), 1536) / 1536.0
+                penalty_scale = max(0.35, 1.0 - 0.45 * normalised)
+            shaped_reward -= stagnation_penalty * penalty_scale
 
         if context.done and context.base_reward <= 0:
             shaped_reward += death_penalty

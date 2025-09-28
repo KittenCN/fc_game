@@ -114,8 +114,10 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
         ensure_sequence(tuple([run_right] * 5 + [run_jump_right] * 5), direction="forward")
         ensure_sequence(tuple([run_right] * 6 + [run_jump_right] * 6), direction="forward")
         ensure_sequence(tuple([run_right] * 4 + [run_jump_right] * 8), direction="forward")
+        ensure_sequence(tuple([run_right] * 10 + [run_jump_right] * 6), direction="forward")
     if run_right is not None:
         ensure_sequence(tuple([run_right] * 8), direction="forward")
+        ensure_sequence(tuple([run_right] * 12), direction="forward")
     if run_right is not None and short_jump_right is not None:
         ensure_sequence(tuple([run_right] * 2 + [short_jump_right] * 3), direction="forward")
         ensure_sequence(tuple([run_right] * 3 + [short_jump_right] * 4 + [run_right] * 2), direction="forward")
@@ -133,8 +135,10 @@ def _derive_skill_sequences(action_set: Sequence[Sequence[str]]) -> SkillSequenc
         ensure_sequence(tuple([run_left] * 5 + [run_jump_left] * 5), direction="backward")
         ensure_sequence(tuple([run_left] * 6 + [run_jump_left] * 6), direction="backward")
         ensure_sequence(tuple([run_left] * 4 + [run_jump_left] * 8), direction="backward")
+        ensure_sequence(tuple([run_left] * 10 + [run_jump_left] * 6), direction="backward")
     if run_left is not None:
         ensure_sequence(tuple([run_left] * 8), direction="backward")
+        ensure_sequence(tuple([run_left] * 12), direction="backward")
     if run_left is not None and short_jump_left is not None:
         ensure_sequence(tuple([run_left] * 2 + [short_jump_left] * 3), direction="backward")
         ensure_sequence(tuple([run_left] * 3 + [short_jump_left] * 4 + [run_left] * 2), direction="backward")
@@ -171,6 +175,10 @@ def build_env(
     exploration_epsilon: float,
     stagnation_max_frames: int | None,
     stagnation_progress_threshold: int,
+    stagnation_bonus_scale: float,
+    stagnation_idle_multiplier: float,
+    stagnation_backtrack_penalty_scale: float,
+    stagnation_backtrack_stop_ratio: float,
 ) -> gym.Env:
     reward_cfg = reward_config_factory() if reward_config_factory else None
     env = NESGymEnv(
@@ -184,6 +192,10 @@ def build_env(
         auto_start_press_frames=auto_start_press_frames,
         stagnation_max_frames=stagnation_max_frames,
         stagnation_progress_threshold=stagnation_progress_threshold,
+        stagnation_bonus_scale=stagnation_bonus_scale,
+        stagnation_idle_multiplier=stagnation_idle_multiplier,
+        stagnation_backtrack_penalty_scale=stagnation_backtrack_penalty_scale,
+        stagnation_backtrack_stop_ratio=stagnation_backtrack_stop_ratio,
     )
     if resize_shape and observation_type in {"rgb", "gray", "rgb_ram", "gray_ram"}:
         env = ResizeObservationWrapper(env, resize_shape)
@@ -244,6 +256,10 @@ def make_vector_env(
     exploration_epsilon: float = 0.05,
     stagnation_max_frames: int | None = 900,
     stagnation_progress_threshold: int = 1,
+    stagnation_bonus_scale: float = 0.15,
+    stagnation_idle_multiplier: float = 1.1,
+    stagnation_backtrack_penalty_scale: float = 1.0,
+    stagnation_backtrack_stop_ratio: float = 0.7,
     frame_stack: int = 4,
     use_icm: bool = False,
     icm_kwargs: dict | None = None,
@@ -269,6 +285,10 @@ def make_vector_env(
             exploration_epsilon=exploration_epsilon,
             stagnation_max_frames=stagnation_max_frames,
             stagnation_progress_threshold=stagnation_progress_threshold,
+            stagnation_bonus_scale=stagnation_bonus_scale,
+            stagnation_idle_multiplier=stagnation_idle_multiplier,
+            stagnation_backtrack_penalty_scale=stagnation_backtrack_penalty_scale,
+            stagnation_backtrack_stop_ratio=stagnation_backtrack_stop_ratio,
         ),
         vec_env_cls=vec_cls,
     )

@@ -155,3 +155,54 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - 进行 ≥200k timestep 的短程 PPO 训练，观察热点方向分布与 `backtrack` 事件占比（负责人：开放）。
 - 若回退仍占主导，考虑在 `MacroSequenceLibrary` 中拆分中立序列或调整停滞阈值以匹配新策略（优先级：中）。
 - 更新 `fc_emulator.analysis`，增加按时间片展示热点方向的能力（优先级：低）。
+
+## 更新记录（2025-09-28 晚间）
+
+### 发现的问题
+- 新一轮 5M timestep 训练（`runs/episode_log.jsonl` 共 2571 回合）中 `time_limit` 终止 669 次，34.6% 回合时长 ≥2000，平均 `mario_x≈361`，`stagnation` 占 74%。
+- 后半程 `backtrack` 事件占比反超 `stagnation`（541 vs 522），热点转移至 `384/288/576` 桶但 0~96 桶仍出现 125 次复发。
+- 平均 shaped reward 下降至 -105，`stagnation_frames` 平均 974，说明放宽阈值后长时间空跑带来负面优势。
+
+### 分析与原因
+- `StagnationMonitor` 依据 `bonus_scale=0.25` 将高进度阈值抬升至 1000+ 帧，回退时未及时截断，导致 episode 被 `TimeLimit` 截断。
+- 探索 ε 衰减至 0.02 后，热点重复命中未触发宏动作提升，`backtrack` 回合难以摆脱。
+- 奖励塑形中时间罚项与停滞罚项叠加，长程回合虽达到 `mario_x>1500` 仍获得 -60~-150，抑制策略对长程样本的偏好。
+
+### 采取的方案
+- 代码变更摘要：
+  - 文件/模块：`stagnation.py`、`rl_env.py`、`rl_utils.py`、`callbacks.py`、`rewards.py`、`train.py`
+  - 关键改动：
+    - 暴露并调整停滞参数（`bonus_scale`、`idle_multiplier`、`backtrack_penalty`、`backtrack_stop_ratio`），缩短默认停滞帧数至 760，限制超长 episode。
+    - 为热点重复的停滞/回退回合提供 ε 提升窗口，并扩充宏动作序列，避免热点“倒车”。
+    - 重新平衡奖励：下调时间惩罚、引入分段里程碑奖励、对高桶位的停滞罚项做衰减。
+- 运行命令与参数：
+  ```bash
+  python -m compileall fc_emulator
+  ```
+
+### 实验与结果
+- 数据集/切分：未重新训练，准备以新增参数进行 2e5 timestep 快速回归，重点跟踪长 episode 比例与热点分布。
+- 指标（基线 vs 新方案）：待验证，预计对比 `mario_x` 均值、`backtrack` 占比、`stagnation_frames` 均值。
+- 资源占用与耗时：后续实验启动后记录。
+- 结论：停滞与探索策略已完成代码层面的防御性调整，需通过回归实验验证收益。
+
+### 后续计划
+- 启动 20 万 timestep 快速实验（命令如下），验证停滞截断与 ε 提升是否降低 `time_limit` 占比（优先级：高 / 负责人：开放）。
+  ```bash
+  python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
+    --algo ppo --policy-preset mario_large \
+    --total-timesteps 200000 --num-envs 12 --vec-env subproc \
+    --frame-skip 4 --frame-stack 4 --resize 84 84 \
+    --reward-profile smb_progress --observation-type gray \
+    --stagnation-frames 760 --stagnation-progress 1 \
+    --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
+    --stagnation-backtrack-penalty 1.0 --stagnation-backtrack-stop-ratio 0.7 \
+    --max-episode-steps 3200 \
+    --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 2000000 \
+    --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
+    --icm --icm-eta 0.015 --icm-lr 5e-5 \
+    --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
+    --episode-log episode_log_fast.jsonl --tensorboard
+  ```
+- 按热点桶记录重复命中统计，必要时在 `analysis` 模块新增可视化支持（优先级：中）。
+- 若奖励仍偏负，考虑引入正归一化或使用 advantage clipping（优先级：低）。

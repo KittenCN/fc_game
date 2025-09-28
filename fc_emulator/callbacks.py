@@ -177,7 +177,7 @@ __all__ = [
 
 
 class ExplorationEpsilonCallback(BaseCallback):
-    """Linearly anneal epsilon for EpsilonRandomActionWrapper."""
+    """Linearly anneal epsilon for EpsilonRandomActionWrapper with hotspot boosts."""
 
     def __init__(
         self,
@@ -185,14 +185,27 @@ class ExplorationEpsilonCallback(BaseCallback):
         initial_epsilon: float,
         final_epsilon: float,
         decay_steps: int,
+        boost_epsilon: float = 0.05,
+        boost_threshold: int = 4,
+        boost_duration: int = 100_000,
     ) -> None:
         super().__init__()
         self.initial_epsilon = max(0.0, float(initial_epsilon))
         self.final_epsilon = max(0.0, float(final_epsilon))
         self.decay_steps = max(0, int(decay_steps))
+        self.boost_epsilon = max(self.final_epsilon, float(boost_epsilon))
+        self.boost_threshold = max(1, int(boost_threshold))
+        self.boost_duration = max(0, int(boost_duration))
         self._last_value: float | None = None
+        self._boost_steps_remaining = 0
+        self._repeat_bucket: int | None = None
+        self._repeat_count = 0
+        self._boost_events = {"stagnation", "backtrack", "no_progress"}
 
     def _on_training_start(self) -> None:
+        self._boost_steps_remaining = 0
+        self._repeat_bucket = None
+        self._repeat_count = 0
         self._apply(self.initial_epsilon)
 
     def _on_step(self) -> bool:
@@ -201,7 +214,46 @@ class ExplorationEpsilonCallback(BaseCallback):
         else:
             fraction = min(1.0, self.num_timesteps / float(self.decay_steps))
             target = self.initial_epsilon + fraction * (self.final_epsilon - self.initial_epsilon)
-        self._apply(target)
+
+        infos = self.locals.get("infos") or []
+        for info in infos:
+            if not info.get("episode"):
+                continue
+            metrics = info.get("metrics") or {}
+            bucket = metrics.get("stagnation_bucket")
+            event = metrics.get("stagnation_event")
+            truncated = bool(info.get("stagnation_truncated"))
+            if (
+                isinstance(bucket, int)
+                and isinstance(event, str)
+                and event in self._boost_events
+                and truncated
+            ):
+                if bucket == self._repeat_bucket:
+                    self._repeat_count += 1
+                else:
+                    self._repeat_bucket = bucket
+                    self._repeat_count = 1
+                if self._repeat_count >= self.boost_threshold:
+                    self._boost_steps_remaining = self.boost_duration
+                    self._repeat_bucket = None
+                    self._repeat_count = 0
+                    break
+            else:
+                self._repeat_bucket = None
+                self._repeat_count = 0
+
+        effective = target
+        if self._boost_steps_remaining > 0 and self.boost_duration > 0:
+            ratio = min(1.0, max(0.0, self._boost_steps_remaining / float(self.boost_duration)))
+            boost_level = self.final_epsilon + ratio * (self.boost_epsilon - self.final_epsilon)
+            effective = max(effective, boost_level)
+            self._boost_steps_remaining = max(0, self._boost_steps_remaining - 1)
+        elif self._boost_steps_remaining > 0:
+            effective = max(effective, self.boost_epsilon)
+            self._boost_steps_remaining = 0
+
+        self._apply(effective)
         return True
 
     def _apply(self, value: float) -> None:

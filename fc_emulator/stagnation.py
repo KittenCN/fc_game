@@ -11,14 +11,15 @@ import numpy as np
 class StagnationConfig:
     base_frames: int | None = 900
     progress_threshold: int = 1
-    bonus_scale: float = 0.25
+    bonus_scale: float = 0.15
     micro_relief_ratio: float = 0.5
     score_relief_base: int = 6
     powerup_relief: int = 45
     hotspot_bucket: int = 32
-    idle_limit_multiplier: float = 1.3
+    idle_limit_multiplier: float = 1.1
     score_relief_cap_ratio: float = 0.45
-    backtrack_penalty_scale: float = 0.5
+    backtrack_penalty_scale: float = 1.0
+    backtrack_stop_ratio: float = 0.7
 
 
 @dataclass
@@ -51,6 +52,8 @@ class StagnationMonitor:
         self._last_reason: str | None = None
         self._idle_counter = 0
         self._score_relief_budget = 0
+        self._recent_backtrack_bucket: int | None = None
+        self._recent_backtrack_hits = 0
 
     @property
     def counter(self) -> int:
@@ -102,6 +105,8 @@ class StagnationMonitor:
         self._last_reason = None
         self._idle_counter = 0
         self._score_relief_budget = self._score_budget_from_limit(self._limit)
+        self._recent_backtrack_bucket = None
+        self._recent_backtrack_hits = 0
 
     def update(self, metrics: dict[str, Any], ram: np.ndarray, *, frame_skip: int) -> StagnationStatus:
         current_x = self._get_mario_x(metrics, ram)
@@ -112,6 +117,8 @@ class StagnationMonitor:
             self._last_reason = None
             self._idle_counter = 0
             self._score_relief_budget = 0
+            self._recent_backtrack_bucket = None
+            self._recent_backtrack_hits = 0
             return StagnationStatus(
                 counter=0,
                 limit=None,
@@ -163,6 +170,8 @@ class StagnationMonitor:
             self._max_progress_x = max(self._max_progress_x, current_x)
             reset_budget = True
             event = reason
+            self._recent_backtrack_hits = 0
+            self._recent_backtrack_bucket = None
         elif delta_x < 0:
             reason = "backtrack"
             penalty_scale = max(0.0, self.config.backtrack_penalty_scale)
@@ -172,6 +181,13 @@ class StagnationMonitor:
                     self._counter += penalty
                     self._idle_counter += penalty
             event = reason
+            bucket = self._bucketise(self._last_progress_x)
+            if bucket is not None:
+                if bucket == self._recent_backtrack_bucket:
+                    self._recent_backtrack_hits += 1
+                else:
+                    self._recent_backtrack_bucket = bucket
+                    self._recent_backtrack_hits = 1
 
         world = metrics.get("world")
         stage = metrics.get("stage")
@@ -258,7 +274,28 @@ class StagnationMonitor:
                 int(self._limit * max(1.0, self.config.idle_limit_multiplier)),
             )
 
-        if self._limit is not None and self._counter >= self._limit:
+        forced_backtrack = False
+        backtrack_ratio = max(0.0, min(1.0, self.config.backtrack_stop_ratio))
+        if (
+            backtrack_ratio > 0.0
+            and self._max_progress_x > 0
+            and current_x < int(self._max_progress_x * backtrack_ratio)
+            and self._max_progress_x - current_x >= max(1, self.config.progress_threshold)
+        ):
+            forced_backtrack = True
+            event = event or "backtrack_stop"
+            reason = "backtrack"
+
+        if forced_backtrack:
+            triggered = True
+            frames = self._counter or frame_skip
+            self._counter = 0
+            self._idle_counter = 0
+            self._last_progress_x = current_x
+            trigger_reason = "backtrack"
+            self._recent_backtrack_hits = 0
+            self._recent_backtrack_bucket = None
+        elif self._limit is not None and self._counter >= self._limit:
             triggered = True
             frames = self._counter
             self._counter = 0
@@ -278,8 +315,14 @@ class StagnationMonitor:
             if trigger_reason:
                 reason = trigger_reason
             event = event or trigger_reason or reason
+            self._recent_backtrack_hits = 0
+            self._recent_backtrack_bucket = None
         else:
             event = event or reason
+            if self._recent_backtrack_hits > 0 and reason != "backtrack":
+                self._recent_backtrack_hits = max(0, self._recent_backtrack_hits - 1)
+                if self._recent_backtrack_hits == 0:
+                    self._recent_backtrack_bucket = None
 
         if reset_budget:
             self._limit = self._compute_limit()

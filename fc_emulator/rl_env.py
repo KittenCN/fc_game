@@ -64,6 +64,10 @@ class NESGymEnv(gym.Env):
         auto_start_press_frames: int = 6,
         stagnation_max_frames: int | None = 900,
         stagnation_progress_threshold: int = 1,
+        stagnation_bonus_scale: float = 0.15,
+        stagnation_idle_multiplier: float = 1.1,
+        stagnation_backtrack_penalty_scale: float = 1.0,
+        stagnation_backtrack_stop_ratio: float = 0.7,
     ) -> None:
         super().__init__()
         self.emulator = NESEmulator(rom_path)
@@ -88,7 +92,14 @@ class NESGymEnv(gym.Env):
         )
         progress_threshold = max(0, int(stagnation_progress_threshold))
         self._stagnation_monitor = StagnationMonitor(
-            StagnationConfig(base_frames=base_frames, progress_threshold=progress_threshold)
+            StagnationConfig(
+                base_frames=base_frames,
+                progress_threshold=progress_threshold,
+                bonus_scale=float(stagnation_bonus_scale),
+                idle_limit_multiplier=float(stagnation_idle_multiplier),
+                backtrack_penalty_scale=float(stagnation_backtrack_penalty_scale),
+                backtrack_stop_ratio=float(stagnation_backtrack_stop_ratio),
+            )
         )
 
         self.action_space = gym.spaces.MultiBinary(len(BUTTON_ORDER))
