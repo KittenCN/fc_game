@@ -224,3 +224,15 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - 若内存仍缓慢攀升，考虑在像素堆叠阶段引入 uint8→float16 的懒转换或 Torch 缓冲池复用。
 - 对新日志进行奖励分项拆解，按需暴露 YAML 权重配置。
 - 基于热点统计实现存档回放或子目标探索，尝试 Go-Explore 式策略。
+
+### 2025-09-29 下午（网络路线调研）
+
+#### 发现的问题
+- 原调研仅覆盖三类方案，缺乏对 Rainbow/RND/Go-Explore 等方向的证据比勘，短期路线也未明确优先级。
+
+#### 采取的方案
+- 更新 `docs/NETWORK_RESEARCH.md`：新增“一句话结论”，扩展方案 A–G 分析，修正 Rainbow replay 内存估算（≥7GiB）、强调 RecurrentPPO 序列对齐、UNREAL 权重调度、RND 共享编码、Go-Explore savestate 依赖等要点。
+- 明确路线规划：短期落地 IMPALA-ResNet-LSTM + 共享编码 RND；中期在 Conv-Transformer 与 Rainbow-DQN++ 中择优；长期预留 Go-Explore、层次 RL、Dreamer/MuZero。
+
+#### 后续计划
+- 按调研“后续工作项”推进：优先实现 RecurrentPPO + RND 基线，并准备 Rainbow 序列回放与 Go-Explore savestate 技术验证。
