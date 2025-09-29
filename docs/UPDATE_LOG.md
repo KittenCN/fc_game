@@ -187,3 +187,40 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 #### 下一步计划
 - 使用上述命令重新训练，重点监控：`backtrack_warning` 比例、`mario_x` 分位、shaped reward 分布以及最优回滚触发频次。
 - 若回退仍高，可继续缩短救援冷却或引入阶段性停滞阈值/里程碑奖励。
+
+### 2025-09-29 上午（内存与奖励再平衡）
+
+#### 发现的问题
+- `VecFrameStackPixelsDictWrapper` 每步复制整个堆叠帧缓冲，回合终止时还会额外全拷贝一次；多进程 rollout 下这个热点导致主机内存和 CUDA 显存呈阶梯式增长。
+- 最优模型触发回滚时直接 `algo_cls.load`，旧模型仍占用 CUDA 缓存；多次触发后 GPU reserved memory 未释放。
+- ICM 默认 256 维编码、1e-4 学习率与 baseline `n_steps=1024` 在 11GB 显存机器上压力依旧较高；reward shaping 负项仍明显大于正项，shaped reward 积极样本不足。
+
+#### 分析与原因
+- `stacked_obs.copy()` 与 `prev_stacked = self.stacked_obs.copy()` 在每个 env step 分配新的 ndarray，Python allocator 复用缓慢。
+- 回滚逻辑未显式释放旧模型或清理 CUDA cache，导致空闲显存不回收。
+- ICM 规模与 reward 权重与当前训练现状不匹配，主导了负值优势。
+
+#### 采取的方案
+- 代码变更：
+  - `fc_emulator/observation.py`：改为复用堆叠缓冲，使用 `np.copyto` + 针对终止 env 的按需复制，消除逐帧分配。
+  - `fc_emulator/train.py`：在最优回滚前后执行 `gc.collect()` 和 `torch.cuda.empty_cache()`，并刷新回调对象；CLI 新增 `--icm-device`，默认 ICM 采用轻量配置。
+  - `fc_emulator/icm.py`：默认特征/隐层降至 128，学习率降至 5e-5，`device` 参数支持 `cuda:idx` 并做校验。
+  - `fc_emulator/policies.py`：baseline preset 调整为 `n_steps=768`、`batch_size=192`，降低 rollout buffer 占用。
+  - `fc_emulator/rewards.py`：提升前进正奖励与里程碑权重，下调时间/停滞/死亡惩罚，限制回退连击惩罚上限，`reward_scale` 提升至 0.12。
+- 运行命令（20 万步回归 / 6 环境）：
+  ```bash
+  python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
+    --algo ppo --policy-preset baseline --total-timesteps 200000 \
+    --num-envs 6 --vec-env subproc --frame-skip 4 --frame-stack 4 --resize 84 84 \
+    --reward-profile smb_progress --icm --icm-device auto \
+    --checkpoint-freq 200000 --episode-log episode_log_light.jsonl --tensorboard
+  ```
+
+#### 实验与结果
+- 待运行新实验采集：GPU reserved memory 曲线、RSS 变化、`mario_x` 均值/95 分位、`intrinsic_reward` 均值、`stagnation_reason` 分布。
+- 预期：显存不再阶梯式上升，RSS 进入平稳波动区；shaped reward 分布较前一版更接近零点，停滞占比下降。
+
+#### 后续计划
+- 若内存仍缓慢攀升，考虑在像素堆叠阶段引入 uint8→float16 的懒转换或 Torch 缓冲池复用。
+- 对新日志进行奖励分项拆解，按需暴露 YAML 权重配置。
+- 基于热点统计实现存档回放或子目标探索，尝试 Go-Explore 式策略。

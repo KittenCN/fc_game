@@ -20,11 +20,11 @@ def _compute_flatten_size(module: nn.Module, channels: int, height: int, width: 
 
 @dataclass
 class ICMConfig:
-    feature_dim: int = 256
-    hidden_dim: int = 256
+    feature_dim: int = 128
+    hidden_dim: int = 128
     beta: float = 0.2
-    eta: float = 0.01
-    learning_rate: float = 1e-4
+    eta: float = 0.02
+    learning_rate: float = 5e-5
     device: str = "auto"
     pixel_key: str = "pixels"
 
@@ -100,6 +100,8 @@ class ICMVecEnvWrapper(VecEnvWrapper):
         config = ICMConfig(**{k: v for k, v in kwargs.items() if k in ICMConfig.__annotations__})
         if config.device == "auto":
             config.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if config.device not in {"cpu", "cuda"} and not config.device.startswith("cuda"):
+            raise ValueError("ICM device must be 'auto', 'cpu' or a cuda string such as 'cuda'/'cuda:0'")
         self.config = config
         observation_space = venv.observation_space
         if hasattr(observation_space, "spaces") and config.pixel_key in getattr(observation_space, "spaces", {}):

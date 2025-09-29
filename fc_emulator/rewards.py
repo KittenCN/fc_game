@@ -33,22 +33,22 @@ def _decode_score(ram: np.ndarray) -> int | None:
 
 def make_super_mario_progress_reward(
     *,
-    progress_scale: float = 0.05,
-    backward_penalty: float = 0.1,
-    time_penalty: float = 0.003,
-    death_penalty: float = -25.0,
-    score_scale: float = 0.01,
-    stagnation_penalty: float = 10.0,
-    milestone_scale: float = 0.02,
-    idle_decay_penalty: float = 0.2,
+    progress_scale: float = 0.08,
+    backward_penalty: float = 0.04,
+    time_penalty: float = 0.0015,
+    death_penalty: float = -12.0,
+    score_scale: float = 0.015,
+    stagnation_penalty: float = 6.0,
+    milestone_scale: float = 0.03,
+    idle_decay_penalty: float = 0.08,
     stagnation_escape_threshold: int = 180,
-    stagnation_escape_bonus: float = 12.0,
-    micro_progress_bonus: float = 0.3,
+    stagnation_escape_bonus: float = 10.0,
+    micro_progress_bonus: float = 0.45,
     powerup_bonus: float = 15.0,
-    forward_hold_bonus: float = 0.2,
+    forward_hold_bonus: float = 0.35,
     forward_hold_threshold: int = 18,
-    backtrack_streak_penalty: float = 0.2,
-    reward_scale: float = 0.1,
+    backtrack_streak_penalty: float = 0.05,
+    reward_scale: float = 0.12,
 ) -> RewardConfig:
     """Shaping inspired by popular SMB RL projects."""
 
@@ -123,7 +123,7 @@ def make_super_mario_progress_reward(
         state["prev_x"] = x_pos
 
         if state["backtrack_streak"]:
-            backtrack_penalty_value = min(32, int(state["backtrack_streak"])) * backtrack_streak_penalty
+            backtrack_penalty_value = min(24, int(state["backtrack_streak"])) * backtrack_streak_penalty
 
         milestone_bonus = 0.0
         best_x = int(state.get("best_x", 0))

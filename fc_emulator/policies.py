@@ -129,8 +129,8 @@ POLICY_PRESETS: Dict[str, PolicyPreset] = {
         policy="CnnPolicy",
         policy_kwargs={"normalize_images": False},
         algo_kwargs={
-            "n_steps": 1024,
-            "batch_size": 256,
+            "n_steps": 768,
+            "batch_size": 192,
         },
     ),
     "mario_large": PolicyPreset(

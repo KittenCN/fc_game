@@ -193,6 +193,8 @@ class VecFrameStackPixelsDictWrapper(VecEnvWrapper):
         self._height = height
         self._width = width
         self.stacked_obs = np.zeros((self.num_envs, channels * n_stack, height, width), dtype=self._dtype)
+        self._prev_stacked = np.empty_like(self.stacked_obs)
+        self._output_buffer = np.empty_like(self.stacked_obs)
 
     def _append(self, pixels: np.ndarray) -> None:
         self.stacked_obs[:, :-self.channels] = self.stacked_obs[:, self.channels:]
@@ -203,14 +205,15 @@ class VecFrameStackPixelsDictWrapper(VecEnvWrapper):
         obs_dict = dict(obs)
         self.stacked_obs.fill(0)
         self._append(obs_dict[self.key])
-        obs_dict[self.key] = self.stacked_obs.copy()
+        np.copyto(self._output_buffer, self.stacked_obs)
+        obs_dict[self.key] = self._output_buffer
         return obs_dict
 
     def step_wait(self):
         obs, rewards, dones, infos = self.venv.step_wait()
         obs_dict = dict(obs)
         pixels = obs_dict[self.key]
-        prev_stacked = self.stacked_obs.copy()
+        np.copyto(self._prev_stacked, self.stacked_obs)
         self._append(pixels)
         for idx, done in enumerate(dones):
             if not done:
@@ -220,11 +223,12 @@ class VecFrameStackPixelsDictWrapper(VecEnvWrapper):
                 term_copy = dict(term)
             else:
                 term_copy = {}
-            term_copy[self.key] = prev_stacked[idx].copy()
+            term_copy[self.key] = self._prev_stacked[idx].copy()
             infos[idx]["terminal_observation"] = term_copy
             self.stacked_obs[idx].fill(0)
             self.stacked_obs[idx, -self.channels:] = pixels[idx]
-        obs_dict[self.key] = self.stacked_obs.copy()
+        np.copyto(self._output_buffer, self.stacked_obs)
+        obs_dict[self.key] = self._output_buffer
         return obs_dict, rewards, dones, infos
 
 

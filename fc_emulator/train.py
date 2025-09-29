@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -183,6 +184,7 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         "learning_rate": float(args.icm_lr),
         "feature_dim": int(args.icm_feature_dim),
         "hidden_dim": int(args.icm_hidden_dim),
+        "device": str(args.icm_device),
     }
 
     episode_log_path: Optional[Path] = None
@@ -480,26 +482,31 @@ def main() -> None:
     parser.add_argument(
         "--icm-eta",
         type=float,
-        default=0.01,
-        help="Scaling factor applied to intrinsic rewards (default: 0.01).",
+        default=0.02,
+        help="Scaling factor applied to intrinsic rewards (default: 0.02).",
     )
     parser.add_argument(
         "--icm-lr",
         type=float,
-        default=1e-4,
-        help="Learning rate for the curiosity module (default: 1e-4).",
+        default=5e-5,
+        help="Learning rate for the curiosity module (default: 5e-5).",
     )
     parser.add_argument(
         "--icm-feature-dim",
         type=int,
-        default=256,
+        default=128,
         help="Latent feature dimension used by the curiosity encoder.",
     )
     parser.add_argument(
         "--icm-hidden-dim",
         type=int,
-        default=256,
+        default=128,
         help="Hidden layer width for curiosity forward/inverse models.",
+    )
+    parser.add_argument(
+        "--icm-device",
+        default="auto",
+        help="Execution device for the curiosity module (auto/cpu/cuda or cuda:idx).",
     )
     parser.add_argument(
         "--policy-preset",
@@ -707,6 +714,10 @@ def main() -> None:
             best_path = config.best_checkpoint
             if best_path and best_path.exists():
                 print(f"Reloading best checkpoint from {best_path}")
+                old_model = model
+                model = None
+                gc.collect()
+                _clear_cuda_cache(config.device)
                 model = algo_cls.load(str(best_path), env=vec_env, device=config.device)
                 if hasattr(model, "tensorboard_log"):
                     if tensorboard_log:
@@ -714,6 +725,10 @@ def main() -> None:
                     else:
                         model.tensorboard_log = None
                 model.num_timesteps = after_steps
+                _refresh_callbacks_model(callbacks, model)
+                del old_model
+                gc.collect()
+                _clear_cuda_cache(config.device)
             else:
                 print("Best checkpoint flagged for reload but file not found; continuing without reload.")
 
@@ -731,3 +746,31 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+def _clear_cuda_cache(device_spec: str) -> None:
+    """Release cached CUDA memory when reloading checkpoints."""
+
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - optional dependency
+        return
+
+    if device_spec.lower() == "cpu":
+        return
+    if not torch.cuda.is_available():
+        return
+    if device_spec.lower() != "auto" and not device_spec.lower().startswith("cuda"):
+        return
+
+    torch.cuda.empty_cache()
+
+
+def _refresh_callbacks_model(callbacks: list[Any], model: Any) -> None:
+    """Ensure callbacks reference the latest model instance after reloads."""
+
+    for callback in callbacks:
+        try:
+            callback.model = model
+        except AttributeError:
+            continue
+        if getattr(callback, "training_env", None) is None and getattr(model, "get_env", None):
+            callback.training_env = model.get_env()

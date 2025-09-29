@@ -121,3 +121,4 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 
 ## 更新维护记录
 - 近期问题、实验结果与后续计划已迁移至 [`docs/UPDATE_LOG.md`](docs/UPDATE_LOG.md)，请在更新诊断信息或实验结论时同步维护该文件。
+- 关于未来网络重构与替代架构的调研，请参阅 [`docs/NETWORK_RESEARCH.md`](docs/NETWORK_RESEARCH.md)。
