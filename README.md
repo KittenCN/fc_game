@@ -55,7 +55,7 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - `--exploration-*`：配置 epsilon 衰减以及宏动作探索强度
 - `--entropy-*`：通过 `EntropyCoefficientCallback` 线性衰减策略熵系数
 - `--reward-profile`：`none` / `smb_progress` / `smb_dense`
-- `--icm`：启用内在奖励模块（需像素观测）
+- `--rnd`：启用随机网络蒸馏内在奖励（默认共享策略编码器）
 - `--diagnostics-*`：控制诊断日志频率、窗口长度以及热点分桶
 
 训练流程会自动：
@@ -88,13 +88,14 @@ python -m fc_emulator.infer --rom roms/SuperMarioBros.nes \
 针对 12 线程 CPU、11GB 显存 RTX 2080 Ti 与 40GB RAM，我们推荐如下组合：
 
 ```bash
+# PPO + RND baseline
 python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --algo ppo --policy-preset baseline \
   --total-timesteps 1200000 --num-envs 6 --vec-env subproc \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
-  --n-steps 1024 --batch-size 256 \
-  --icm --icm-eta 0.015 --icm-lr 5e-5 --icm-feature-dim 128 --icm-hidden-dim 128 \
+  --n-steps 768 --batch-size 192 \
+  --rnd --rnd-scale 0.5 --rnd-lr 1e-4 \
   --stagnation-frames 720 --stagnation-progress 1 \
   --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
   --stagnation-backtrack-penalty 1.5 \
@@ -103,11 +104,29 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
   --best-checkpoint best_agent.zip --best-metric-key mario_x --best-metric-mode max --best-window 30 --best-patience 6 --best-min-improve 1.0 \
   --episode-log episode_log.jsonl
+
+# RecurrentPPO + IMPALA 残差基线
+python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
+  --algo rppo --policy-preset impala_lstm \
+  --total-timesteps 1200000 --num-envs 6 --vec-env subproc \
+  --frame-skip 4 --frame-stack 4 --resize 84 84 \
+  --reward-profile smb_progress --observation-type gray \
+  --n-steps 512 --batch-size 128 \
+  --rnd --rnd-scale 0.5 --rnd-lr 1e-4 \
+  --stagnation-frames 720 --stagnation-progress 1 \
+  --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
+  --stagnation-backtrack-penalty 1.5 \
+  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
+  --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
+  --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
+  --best-checkpoint best_agent.zip --best-metric-key mario_x --best-metric-mode max --best-window 30 --best-patience 6 --best-min-improve 1.0 \
+  --episode-log episode_log_rppo.jsonl
 ```
 
 推荐理由：
-- `num_envs=6` + `n_steps=1024` 可大幅降低 rollout buffer 的显存占用，同时保持合理的样本吞吐。
-- `icm-feature-dim=128` / `icm-hidden-dim=128` 让 ICM 仍然生效但计算显存压力更低。
+- `num_envs=6` + `n_steps=512~768` 平衡采样吞吐与显存占用，适合单卡 11GB 环境。
+- `--rnd` 仅需共享策略编码器即可提供稳定的内在奖励，避免 ICM 重复卷积的显存压力。
+- 使用 IMPALA 残差 + LSTM 时请搭配 `--algo rppo`，并确保 rollout/batch 序列对齐以满足 RecurrentPPO 的隐藏态要求。
 - `exploration` / `entropy` 衰减延长至 300 万步，利用热点持久化策略逐步降低随机性但保留宏动作注入窗口。
 - `stagnation-frames=720` 搭配持久化热点与 `score_loop` 监测，让宏动作有尝试空间同时快速截断刷分循环。
 - `checkpoint-freq=1000000` 与频率更高的诊断刷新（2000）确保能观察热点分布与 `stagnation_reason` 变化并及时回滚。

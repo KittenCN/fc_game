@@ -263,6 +263,8 @@ def make_vector_env(
     frame_stack: int = 4,
     use_icm: bool = False,
     icm_kwargs: dict | None = None,
+    use_rnd: bool = False,
+    rnd_kwargs: dict | None = None,
 ) -> VecEnv:
     chosen_action_set = action_set or DEFAULT_ACTION_SET
     vec_cls = _select_vec_env_cls(vec_env_type, n_envs)
@@ -307,6 +309,12 @@ def make_vector_env(
 
         icm_cfg = dict(icm_kwargs or {})
         env = ICMVecEnvWrapper(env, **icm_cfg)
+
+    if use_rnd:
+        from fc_emulator.rnd import RNDVecEnvWrapper  # pragma: no cover - optional dependency
+
+        rnd_cfg = dict(rnd_kwargs or {})
+        env = RNDVecEnvWrapper(env, **rnd_cfg)
 
     return env
 

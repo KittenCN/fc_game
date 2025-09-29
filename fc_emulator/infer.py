@@ -62,7 +62,8 @@ def main() -> None:
         stagnation_progress_threshold=stagnation_progress_threshold,
         frame_stack=args.frame_stack,
         use_icm=False,
-    )
+        use_rnd=False,
+    )
 
     algo_cls = ALGO_MAP[args.algo]
     model = algo_cls.load(str(model_path), env=vec_env, device=args.device)

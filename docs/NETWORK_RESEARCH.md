@@ -100,7 +100,7 @@
 - **判定标准**：在相同资源下，若方案平均 `mario_x` 提升 ≥20%、停滞占比下降 ≥15%、显存峰值 <9GB，则纳入主线。
 
 ## 8. 后续工作项
-- [ ] 设计 `ImpalaResidualFeatureExtractor` + `RecurrentPolicyPreset`，并实现共享编码的 RND 头（默认替换 ICM）。
+- [x] 设计 `ImpalaResidualFeatureExtractor` + `impala_lstm` 预设，并在训练流程中默认与共享编码 RND 集成。
 - [ ] 评估方案 D 的 RND/UNREAL 协同，明确损失权重与日志需求。
 - [ ] 规划 Rainbow-DQN++ 的模块拆分（PER、Noisy、RND、LSTM 序列采样），确认复用组件并评估 ≥7GiB replay 需求。
 - [ ] 设计层次 RL 与 Go-Explore 所需的环境扩展（savestate/目标接口）。
