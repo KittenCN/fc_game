@@ -234,6 +234,7 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 - 更新 `docs/NETWORK_RESEARCH.md`：新增“一句话结论”，扩展方案 A–G 分析，修正 Rainbow replay 内存估算（≥7GiB）、强调 RecurrentPPO 序列对齐、UNREAL 权重调度、RND 共享编码、Go-Explore savestate 依赖等要点。
 - 明确路线规划：短期落地 IMPALA-ResNet-LSTM + 共享编码 RND；中期在 Conv-Transformer 与 Rainbow-DQN++ 中择优；长期预留 Go-Explore、层次 RL、Dreamer/MuZero。
 - 代码层面：实现 `RNDVecEnvWrapper`、新增 `--rnd` CLI 配置，训练流程默认挂载共享编码器的 RND 内在奖励并保留 ICM 作为可选项，更新 README 推荐命令。
+- 进一步调整：RND 改为默认使用独立轻量 CNN 编码器（新增 `--rnd-shared-encoder` 选项），默认 lr/scale 下调至 `5e-5`/`0.2`，示例命令同步提升停滞阈值与缩短探索衰减。
 - 新增 `ImpalaResidualFeatureExtractor` 与 `impala_lstm` 预设（CnnLstmPolicy），配合 `--algo rppo` 即可启用 IMPALA 残差 + LSTM 基线；README 增补示例命令与注意事项。
 
 #### 后续计划

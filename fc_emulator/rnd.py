@@ -1,9 +1,11 @@
 """Random Network Distillation wrapper for VecEnv."""
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
@@ -54,11 +56,12 @@ class _RunningMeanStd:
 @dataclass
 class RNDConfig:
     hidden_dim: int = 512
-    learning_rate: float = 1e-4
-    scale: float = 1.0
+    learning_rate: float = 5e-5
+    scale: float = 0.2
     normalize: bool = True
     device: str | torch.device = "auto"
     clip_norm: float = 5.0
+    shared_encoder: bool = False
 
 
 class RNDVecEnvWrapper(VecEnvWrapper):
@@ -76,6 +79,10 @@ class RNDVecEnvWrapper(VecEnvWrapper):
         self.target: nn.Module | None = None
         self.optimizer: torch.optim.Optimizer | None = None
         self.running_stats = _RunningMeanStd()
+        self._dict_key: str | None = None
+
+        if not self.config.shared_encoder:
+            self._init_default_encoder()
 
     def set_encoder(
         self,
@@ -86,10 +93,14 @@ class RNDVecEnvWrapper(VecEnvWrapper):
     ) -> None:
         """Attach a feature encoder shared with the policy."""
 
-        self.encoder = encoder
-        self.encoder_device = next((p.device for p in encoder.parameters() if p.requires_grad), None)
+        cloned = copy.deepcopy(encoder)
+        cloned.eval()
+        for param in cloned.parameters():
+            param.requires_grad_(False)
+        self.encoder = cloned
+        self.encoder_device = next((p.device for p in cloned.parameters()), None)
         if feature_dim is None:
-            feature_dim = int(getattr(encoder, "features_dim", 0))
+            feature_dim = int(getattr(encoder, "features_dim", 0)) or int(getattr(cloned, "features_dim", 0))
         if not feature_dim or feature_dim <= 0:
             raise ValueError("Unable to determine feature dimension for RND.")
         self.feature_dim = feature_dim
@@ -158,34 +169,61 @@ class RNDVecEnvWrapper(VecEnvWrapper):
 
     def _obs_to_tensor(self, obs: Any) -> torch.Tensor:
         if isinstance(obs, dict):
-            pixels = obs.get("pixels")
-            if pixels is None:
-                raise ValueError("RND wrapper requires 'pixels' entry for dict observations")
-            array = pixels
+            key = self._dict_key or "pixels"
+            array = obs[key]
         else:
             array = obs
-        tensor = torch.as_tensor(array, device=self.encoder_device or self.device, dtype=torch.float32)
+        tensor = torch.as_tensor(array, dtype=torch.float32, device=self.encoder_device or self.device)
         if tensor.ndim == 3:
             tensor = tensor.unsqueeze(0)
-        if tensor.dtype != torch.float32:
-            tensor = tensor.float()
+        if tensor.max() > 1.0:
+            tensor = tensor / 255.0
         return tensor
 
     def _encode(self, obs_tensor: torch.Tensor) -> torch.Tensor:
         if self.encoder is None:
             raise RuntimeError("RND encoder has not been attached.")
-        was_training = getattr(self.encoder, "training", False)
-        try:
-            if was_training:
-                self.encoder.eval()
-            with torch.no_grad():
-                features = self.encoder(obs_tensor).detach()
-        finally:
-            if was_training:
-                self.encoder.train()
-        if self.device != features.device:
+        with torch.no_grad():
+            features = self.encoder(obs_tensor.to(self.encoder_device or self.device))
+        if features.ndim > 2:
+            features = torch.flatten(features, 1)
+        if features.device != self.device:
             features = features.to(self.device)
         return features
+
+    def _init_default_encoder(self) -> None:
+        observation_space = self.observation_space
+        if isinstance(observation_space, gym.spaces.Dict):
+            if "pixels" not in observation_space.spaces:
+                raise ValueError("RND default encoder requires a 'pixels' entry in Dict observations")
+            self._dict_key = "pixels"
+            observation_space = observation_space.spaces["pixels"]
+        if len(observation_space.shape) != 3:
+            raise ValueError("RND default encoder expects image observations")
+        in_channels = observation_space.shape[0]
+
+        encoder = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, padding=0),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+        )
+        encoder.eval()
+        for param in encoder.parameters():
+            param.requires_grad_(False)
+
+        with torch.no_grad():
+            sample = torch.zeros((1, *observation_space.shape), dtype=torch.float32)
+            features = encoder(sample)
+            feature_dim = int(features.view(1, -1).shape[1])
+
+        self.encoder = encoder.to(self.device)
+        self.encoder_device = self.device
+        self.feature_dim = feature_dim
+        self._build_networks(feature_dim)
 
 
 __all__ = ["RNDVecEnvWrapper", "RNDConfig"]

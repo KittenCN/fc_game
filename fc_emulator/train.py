@@ -199,6 +199,7 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         "normalize": not args.rnd_disable_norm,
         "device": str(args.rnd_device),
         "clip_norm": float(args.rnd_clip_norm),
+        "shared_encoder": bool(getattr(args, "rnd_shared_encoder", False)),
     }
 
     episode_log_path: Optional[Path] = None
@@ -539,14 +540,14 @@ def main() -> None:
     parser.add_argument(
         "--rnd-lr",
         type=float,
-        default=1e-4,
-        help="Learning rate for the RND predictor network (default: 1e-4).",
+        default=5e-5,
+        help="Learning rate for the RND predictor network (default: 5e-5).",
     )
     parser.add_argument(
         "--rnd-scale",
         type=float,
-        default=0.5,
-        help="Scaling factor applied to normalized RND intrinsic rewards (default: 0.5).",
+        default=0.2,
+        help="Scaling factor applied to normalized RND intrinsic rewards (default: 0.2).",
     )
     parser.add_argument(
         "--rnd-disable-norm",
@@ -563,6 +564,11 @@ def main() -> None:
         type=float,
         default=5.0,
         help="Gradient clipping value applied to the RND predictor (default: 5.0, 0 disables).",
+    )
+    parser.add_argument(
+        "--rnd-shared-encoder",
+        action="store_true",
+        help="Reuse the policy encoder for RND instead of the default lightweight CNN.",
     )
     parser.add_argument(
         "--policy-preset",
@@ -675,15 +681,6 @@ def main() -> None:
             policy_kwargs=config.policy_kwargs,
             **config.algo_kwargs,
         )
-
-    if config.use_rnd and hasattr(vec_env, "set_encoder"):
-        encoder = getattr(model.policy, "features_extractor", None)
-        if encoder is None:
-            raise RuntimeError("Policy does not expose a features_extractor required for RND.")
-        feature_dim = getattr(encoder, "features_dim", None)
-        if feature_dim is None:
-            feature_dim = getattr(model.policy, "features_dim", None)
-        vec_env.set_encoder(encoder, feature_dim=feature_dim, device=config.device)
 
     callbacks: list[Any] = []
     exploration_cfg = config.exploration

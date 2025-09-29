@@ -95,8 +95,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
   --n-steps 768 --batch-size 192 \
-  --rnd --rnd-scale 0.5 --rnd-lr 1e-4 \
-  --stagnation-frames 720 --stagnation-progress 1 \
+  --rnd --rnd-scale 0.2 --rnd-lr 5e-5 \
+  --stagnation-frames 900 --stagnation-progress 1 \
   --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
   --stagnation-backtrack-penalty 1.5 \
   --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
@@ -112,11 +112,11 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
   --frame-skip 4 --frame-stack 4 --resize 84 84 \
   --reward-profile smb_progress --observation-type gray \
   --n-steps 512 --batch-size 128 \
-  --rnd --rnd-scale 0.5 --rnd-lr 1e-4 \
-  --stagnation-frames 720 --stagnation-progress 1 \
+  --rnd --rnd-scale 0.2 --rnd-lr 5e-5 \
+  --stagnation-frames 900 --stagnation-progress 1 \
   --stagnation-bonus-scale 0.15 --stagnation-idle-multiplier 1.1 \
   --stagnation-backtrack-penalty 1.5 \
-  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 3000000 \
+  --exploration-epsilon 0.08 --exploration-final-epsilon 0.02 --exploration-decay-steps 1500000 \
   --entropy-coef 0.02 --entropy-final-coef 0.0045 --entropy-decay-steps 3000000 \
   --checkpoint-freq 200000 --diagnostics-log-interval 2000 \
   --best-checkpoint best_agent.zip --best-metric-key mario_x --best-metric-mode max --best-window 30 --best-patience 6 --best-min-improve 1.0 \
@@ -125,7 +125,8 @@ python -m fc_emulator.train --rom roms/SuperMarioBros.nes \
 
 推荐理由：
 - `num_envs=6` + `n_steps=512~768` 平衡采样吞吐与显存占用，适合单卡 11GB 环境。
-- `--rnd` 仅需共享策略编码器即可提供稳定的内在奖励，避免 ICM 重复卷积的显存压力。
+- `--rnd` 默认携带独立的轻量 CNN 编码器，内部归一化 + 较低 scale（0.2）可避免内在奖励压制外在信号；若需共享编码器，可传入 `--rnd-shared-encoder`（见 CLI 参数）。
+- `stagnation-frames≈900` 在起始关卡给出更多穿越时间，配合宏动作探索更稳；如遇刷分，可再调大 `--stagnation-bonus-scale` 或引入热点惩罚。
 - 使用 IMPALA 残差 + LSTM 时请搭配 `--algo rppo`，并确保 rollout/batch 序列对齐以满足 RecurrentPPO 的隐藏态要求。
 - `exploration` / `entropy` 衰减延长至 300 万步，利用热点持久化策略逐步降低随机性但保留宏动作注入窗口。
 - `stagnation-frames=720` 搭配持久化热点与 `score_loop` 监测，让宏动作有尝试空间同时快速截断刷分循环。
