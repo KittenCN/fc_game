@@ -811,8 +811,6 @@ def main() -> None:
     vec_env.close()
 
 
-if __name__ == "__main__":
-    main()
 def _clear_cuda_cache(device_spec: str) -> None:
     """Release cached CUDA memory when reloading checkpoints."""
 
@@ -841,3 +839,7 @@ def _refresh_callbacks_model(callbacks: list[Any], model: Any) -> None:
             continue
         if getattr(callback, "training_env", None) is None and getattr(model, "get_env", None):
             callback.training_env = model.get_env()
+
+
+if __name__ == "__main__":
+    main()
