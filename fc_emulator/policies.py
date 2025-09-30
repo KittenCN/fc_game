@@ -9,6 +9,28 @@ import torch
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
+class ImpalaResidualBlock(torch.nn.Module):
+    """Residual block used in IMPALA-style CNN backbones."""
+
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.conv1 = torch.nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = torch.nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1)
+        self.norm1 = torch.nn.BatchNorm2d(channels)
+        self.norm2 = torch.nn.BatchNorm2d(channels)
+        self.activation = torch.nn.ReLU(inplace=True)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        residual = inputs
+        x = self.conv1(inputs)
+        x = self.norm1(x)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = x + residual
+        return self.activation(x)
+
+
 class MarioFeatureExtractor(BaseFeaturesExtractor):
     """Deeper CNN backbone for NES observations (channel-first)."""
 
@@ -117,6 +139,55 @@ class MarioDualFeatureExtractor(BaseFeaturesExtractor):
         return self.linear(combined)
 
 
+class ImpalaResidualFeatureExtractor(BaseFeaturesExtractor):
+    """IMPALA-style residual CNN backbone producing dense features."""
+
+    def __init__(
+        self,
+        observation_space: gym.spaces.Box,
+        *,
+        channels: Tuple[int, ...] = (16, 32, 32),
+        blocks_per_stage: int = 2,
+        dense: int = 512,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__(observation_space, features_dim=dense)
+        if len(observation_space.shape) != 3:
+            raise ValueError("ImpalaResidualFeatureExtractor expects channel-first image observations")
+        in_channels = observation_space.shape[0]
+
+        stages: list[torch.nn.Module] = []
+        for out_channels in channels:
+            stages.append(
+                torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+            )
+            stages.append(torch.nn.BatchNorm2d(out_channels))
+            stages.append(torch.nn.ReLU(inplace=True))
+            for _ in range(blocks_per_stage):
+                stages.append(ImpalaResidualBlock(out_channels))
+            stages.append(torch.nn.MaxPool2d(kernel_size=2, stride=2))
+            in_channels = out_channels
+        if dropout > 0:
+            stages.append(torch.nn.Dropout2d(dropout))
+        self.cnn = torch.nn.Sequential(*stages)
+
+        with torch.no_grad():
+            sample = torch.as_tensor(observation_space.sample()[None]).float() / 255.0
+            conv_out = self.cnn(sample)
+            n_flatten = conv_out.view(1, -1).shape[1]
+
+        self.linear = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(n_flatten, dense),
+            torch.nn.ReLU(inplace=True),
+        )
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        x = observations.float() / 255.0
+        x = self.cnn(x)
+        return self.linear(x)
+
+
 @dataclass(frozen=True)
 class PolicyPreset:
     policy: str
@@ -217,12 +288,31 @@ POLICY_PRESETS: Dict[str, PolicyPreset] = {
             "learning_rate": 2.5e-4,
         },
     ),
+    "impala_lstm": PolicyPreset(
+        policy="CnnLstmPolicy",
+        policy_kwargs={
+            "features_extractor_class": ImpalaResidualFeatureExtractor,
+            "features_extractor_kwargs": {
+                "channels": (16, 32, 32),
+                "blocks_per_stage": 2,
+                "dense": 512,
+                "dropout": 0.05,
+            },
+            "normalize_images": False,
+        },
+        algo_kwargs={
+            "n_steps": 512,
+            "batch_size": 128,
+            "learning_rate": 3e-4,
+        },
+    ),
 }
 
 
 __all__ = [
     "MarioFeatureExtractor",
     "MarioDualFeatureExtractor",
+    "ImpalaResidualFeatureExtractor",
     "PolicyPreset",
     "POLICY_PRESETS",
 ]

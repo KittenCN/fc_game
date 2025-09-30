@@ -83,6 +83,8 @@ class TrainingConfig:
     entropy: dict[str, Any] = field(default_factory=dict)
     icm: dict[str, Any] = field(default_factory=dict)
     use_icm: bool = False
+    rnd: dict[str, Any] = field(default_factory=dict)
+    use_rnd: bool = False
     policy: str = "CnnPolicy"
     policy_kwargs: dict[str, Any] = field(default_factory=dict)
     algo_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -187,6 +189,19 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         "device": str(args.icm_device),
     }
 
+    rnd_enabled = bool(args.rnd)
+    if icm_enabled and rnd_enabled:
+        raise SystemExit("ICM and RND cannot be enabled at the same time.")
+    rnd_kwargs = {
+        "hidden_dim": int(args.rnd_hidden_dim),
+        "learning_rate": float(args.rnd_lr),
+        "scale": float(args.rnd_scale),
+        "normalize": not args.rnd_disable_norm,
+        "device": str(args.rnd_device),
+        "clip_norm": float(args.rnd_clip_norm),
+        "shared_encoder": bool(getattr(args, "rnd_shared_encoder", False)),
+    }
+
     episode_log_path: Optional[Path] = None
     if args.episode_log and args.episode_log.lower() != "none":
         ep_path = Path(args.episode_log)
@@ -242,6 +257,8 @@ def _build_training_config(args: argparse.Namespace) -> TrainingConfig:
         },
         icm=icm_kwargs,
         use_icm=icm_enabled,
+        rnd=rnd_kwargs,
+        use_rnd=rnd_enabled,
         policy=policy_name,
         policy_kwargs=policy_kwargs,
         algo_kwargs=algo_kwargs,
@@ -291,6 +308,7 @@ def _evaluate_progress(model, config: TrainingConfig) -> tuple[float, float]:
         stagnation_backtrack_alert_hits=config.stagnation_backtrack_alert_hits,
         frame_stack=config.frame_stack,
         use_icm=False,
+        use_rnd=False,
     )
 
     mario_x_values: list[float] = []
@@ -509,6 +527,50 @@ def main() -> None:
         help="Execution device for the curiosity module (auto/cpu/cuda or cuda:idx).",
     )
     parser.add_argument(
+        "--rnd",
+        action="store_true",
+        help="Enable random network distillation intrinsic reward.",
+    )
+    parser.add_argument(
+        "--rnd-hidden-dim",
+        type=int,
+        default=512,
+        help="Hidden dimension for the RND predictor/target networks (default: 512).",
+    )
+    parser.add_argument(
+        "--rnd-lr",
+        type=float,
+        default=5e-5,
+        help="Learning rate for the RND predictor network (default: 5e-5).",
+    )
+    parser.add_argument(
+        "--rnd-scale",
+        type=float,
+        default=0.2,
+        help="Scaling factor applied to normalized RND intrinsic rewards (default: 0.2).",
+    )
+    parser.add_argument(
+        "--rnd-disable-norm",
+        action="store_true",
+        help="Disable running-normalization for RND intrinsic rewards.",
+    )
+    parser.add_argument(
+        "--rnd-device",
+        default="auto",
+        help="Execution device for the RND module (auto/cpu/cuda or cuda:idx).",
+    )
+    parser.add_argument(
+        "--rnd-clip-norm",
+        type=float,
+        default=5.0,
+        help="Gradient clipping value applied to the RND predictor (default: 5.0, 0 disables).",
+    )
+    parser.add_argument(
+        "--rnd-shared-encoder",
+        action="store_true",
+        help="Reuse the policy encoder for RND instead of the default lightweight CNN.",
+    )
+    parser.add_argument(
         "--policy-preset",
         choices=sorted(POLICY_PRESETS.keys()),
         default="baseline",
@@ -593,6 +655,8 @@ def main() -> None:
         frame_stack=config.frame_stack,
         use_icm=config.use_icm,
         icm_kwargs=config.icm if config.use_icm else None,
+        use_rnd=config.use_rnd,
+        rnd_kwargs=config.rnd if config.use_rnd else None,
     )
 
     algo_cls = ALGO_MAP[config.algo]
@@ -744,8 +808,6 @@ def main() -> None:
     vec_env.close()
 
 
-if __name__ == "__main__":
-    main()
 def _clear_cuda_cache(device_spec: str) -> None:
     """Release cached CUDA memory when reloading checkpoints."""
 
@@ -774,3 +836,7 @@ def _refresh_callbacks_model(callbacks: list[Any], model: Any) -> None:
             continue
         if getattr(callback, "training_env", None) is None and getattr(model, "get_env", None):
             callback.training_env = model.get_env()
+
+
+if __name__ == "__main__":
+    main()
